@@ -465,27 +465,65 @@ export class AssistantCore {
                     this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
                     
                     // Fetch tool details (input arguments) from session messages
+                    // Retry a few times since there's a race condition between event and message persistence
                     let toolDetails: string | undefined
-                    try {
-                      const messagesResult = await client.session.messages({
-                        path: { id: sessionID },
-                      } as never)
-                      const messages = toMessages(messagesResult)
-                      
-                      // Find the most recent tool call with this tool name
-                      for (let i = messages.length - 1; i >= 0; i--) {
-                        const msg = messages[i]
-                        const msgParts = msg.parts || []
-                        for (const msgPart of msgParts) {
-                          if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
-                            toolDetails = formatToolDetails(toolName, msgPart.input)
-                            break
+                    let retryCount = 0
+                    const maxRetries = 5
+                    
+                    while (retryCount < maxRetries && !toolDetails) {
+                      try {
+                        const messagesResult = await client.session.messages({
+                          path: { id: sessionID },
+                        } as never)
+                        const messages = toMessages(messagesResult)
+                        
+                        // Debug: log message count and last few message types
+                        this.logger.debug({ 
+                          toolName, 
+                          retryCount, 
+                          messageCount: messages.length,
+                          lastMessageRole: messages[messages.length - 1]?.info?.role,
+                          lastMessagePartTypes: messages[messages.length - 1]?.parts?.map((p: { type?: string }) => p.type)
+                        }, "searching for tool details in messages")
+                        
+                        // Find the most recent tool call with this tool name
+                        for (let i = messages.length - 1; i >= 0; i--) {
+                          const msg = messages[i]
+                          const msgParts = msg.parts || []
+                          for (const msgPart of msgParts) {
+                            // Debug: log each tool part we find
+                            if (msgPart.type === "tool") {
+                              this.logger.debug({ 
+                                foundTool: msgPart.tool, 
+                                lookingFor: toolName,
+                                hasInput: !!msgPart.input,
+                                inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : []
+                              }, "found tool part in message")
+                            }
+                            
+                            if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
+                              toolDetails = formatToolDetails(toolName, msgPart.input)
+                              this.logger.info({ toolName, toolDetails, input: msgPart.input }, "found tool details")
+                              break
+                            }
                           }
+                          if (toolDetails) break
                         }
-                        if (toolDetails) break
+                      } catch (fetchError) {
+                        this.logger.debug({ fetchError, toolName, retryCount }, "failed to fetch tool details")
                       }
-                    } catch (fetchError) {
-                      this.logger.debug({ fetchError, toolName }, "failed to fetch tool details")
+                      
+                      if (!toolDetails) {
+                        retryCount++
+                        if (retryCount < maxRetries) {
+                          // Wait 100ms before retrying
+                          await new Promise(resolve => setTimeout(resolve, 100))
+                        }
+                      }
+                    }
+                    
+                    if (!toolDetails) {
+                      this.logger.warn({ toolName, retryCount }, "could not fetch tool details after retries")
                     }
                     
                     if (isSkillTool(toolName)) {
