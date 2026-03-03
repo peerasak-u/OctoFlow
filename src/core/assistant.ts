@@ -16,8 +16,8 @@ type AssistantInput = {
 export type ProgressUpdate =
   | { type: "start" }
   | { type: "thinking" }
-  | { type: "tool"; name: string }
-  | { type: "skill"; name: string }
+  | { type: "tool"; name: string; details?: string }
+  | { type: "skill"; name: string; details?: string }
   | { type: "generating" }
 
 export type ProgressCallback = (update: ProgressUpdate) => void
@@ -176,6 +176,85 @@ function isSkillTool(toolName: string): boolean {
     "agent_browser",
   ]
   return knownSkills.includes(name)
+}
+
+function formatToolDetails(toolName: string, input: unknown): string | undefined {
+  try {
+    const inputData = input as Record<string, unknown>
+    
+    // Tool-specific formatting
+    switch (toolName) {
+      case "bash": {
+        const command = inputData.command || inputData.cmd || inputData.input
+        if (typeof command === "string") {
+          return command.length > 100 ? command.slice(0, 100) + "..." : command
+        }
+        break
+      }
+      case "webfetch": {
+        const url = inputData.url || inputData.input
+        if (typeof url === "string") {
+          return url.length > 100 ? url.slice(0, 100) + "..." : url
+        }
+        break
+      }
+      case "read": {
+        const path = inputData.path || inputData.filePath || inputData.file
+        if (typeof path === "string") {
+          return path.length > 100 ? path.slice(0, 100) + "..." : path
+        }
+        break
+      }
+      case "write": {
+        const path = inputData.path || inputData.filePath || inputData.file
+        if (typeof path === "string") {
+          return path.length > 100 ? path.slice(0, 100) + "..." : path
+        }
+        break
+      }
+      case "grep": {
+        const pattern = inputData.pattern || inputData.search
+        const path = inputData.path || inputData.filePath
+        if (typeof pattern === "string") {
+          const detail = path ? `${pattern} in ${path}` : pattern
+          return detail.length > 100 ? detail.slice(0, 100) + "..." : detail
+        }
+        break
+      }
+      case "edit": {
+        const path = inputData.path || inputData.filePath
+        if (typeof path === "string") {
+          return path.length > 100 ? path.slice(0, 100) + "..." : path
+        }
+        break
+      }
+      default: {
+        // For other tools, try to extract meaningful info
+        const url = inputData.url || inputData.link || inputData.href
+        if (typeof url === "string") {
+          return url.length > 100 ? url.slice(0, 100) + "..." : url
+        }
+        
+        const path = inputData.path || inputData.filePath || inputData.file || inputData.dir
+        if (typeof path === "string") {
+          return path.length > 100 ? path.slice(0, 100) + "..." : path
+        }
+        
+        const query = inputData.query || inputData.search || inputData.q
+        if (typeof query === "string") {
+          return query.length > 100 ? query.slice(0, 100) + "..." : query
+        }
+        
+        const text = inputData.text || inputData.message || inputData.content
+        if (typeof text === "string") {
+          return text.length > 80 ? text.slice(0, 80) + "..." : text
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return undefined
 }
 
 
@@ -385,10 +464,34 @@ export class AssistantCore {
                     
                     this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
                     
+                    // Fetch tool details (input arguments) from session messages
+                    let toolDetails: string | undefined
+                    try {
+                      const messagesResult = await client.session.messages({
+                        path: { id: sessionID },
+                      } as never)
+                      const messages = toMessages(messagesResult)
+                      
+                      // Find the most recent tool call with this tool name
+                      for (let i = messages.length - 1; i >= 0; i--) {
+                        const msg = messages[i]
+                        const msgParts = msg.parts || []
+                        for (const msgPart of msgParts) {
+                          if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
+                            toolDetails = formatToolDetails(toolName, msgPart.input)
+                            break
+                          }
+                        }
+                        if (toolDetails) break
+                      }
+                    } catch (fetchError) {
+                      this.logger.debug({ fetchError, toolName }, "failed to fetch tool details")
+                    }
+                    
                     if (isSkillTool(toolName)) {
-                      onProgress({ type: "skill", name: toolName })
+                      onProgress({ type: "skill", name: toolName, details: toolDetails })
                     } else {
-                      onProgress({ type: "tool", name: toolName })
+                      onProgress({ type: "tool", name: toolName, details: toolDetails })
                     }
                   }
                 }

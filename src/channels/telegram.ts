@@ -30,8 +30,8 @@ const THIRTY_MINUTES_MS = 30 * 60 * 1000
 const SHOW_TOOL_TIMELINE = process.env.SHOW_TOOL_TIMELINE === "true"
 
 type TimelineAction =
-  | { type: "tool"; name: string }
-  | { type: "skill"; name: string }
+  | { type: "tool"; name: string; details?: string }
+  | { type: "skill"; name: string; details?: string }
 
 function formatTimeline(actions: TimelineAction[]): string {
   if (actions.length === 0) return ""
@@ -40,7 +40,8 @@ function formatTimeline(actions: TimelineAction[]): string {
     const bullet = "•"
     const icon = action.type === "tool" ? "🔧" : "📚"
     const label = action.type === "tool" ? "tool" : "skill"
-    return `${bullet} ${icon} ${label} \`${action.name}\``
+    const detailText = action.details ? `\n  └ ${action.details}` : ""
+    return `${bullet} ${icon} ${label} \`${action.name}\`${detailText}`
   })
 
   return "**Actions taken:**\n" + lines.join("\n")
@@ -236,11 +237,11 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         // Don't update status after answer is received or cancelled
         if (answerReceived || cancelledRequests.has(userID)) return
         
-        // Track tool and skill calls for timeline
+        // Track tool and skill calls for timeline (with details for audit)
         if (update.type === "tool" && "name" in update) {
-          timeline.push({ type: "tool", name: update.name })
+          timeline.push({ type: "tool", name: update.name, details: (update as { details?: string }).details })
         } else if (update.type === "skill" && "name" in update) {
-          timeline.push({ type: "skill", name: update.name })
+          timeline.push({ type: "skill", name: update.name, details: (update as { details?: string }).details })
         }
         
         opts.logger.debug({ updateType: update.type, toolName: (update as { name?: string }).name }, "onProgress called")
@@ -291,17 +292,17 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Delete status message before sending final response
       await deleteStatusMessage()
 
-      const chunks = splitTextChunks(answer, 3000)
-      for (const chunk of chunks) {
-        await ctx.reply(chunk, { parse_mode: "Markdown" })
-      }
-
-      // Send tool timeline if enabled and there were actions
+      // Send tool timeline BEFORE the final response (for paranoid users who want to audit)
       if (SHOW_TOOL_TIMELINE && timeline.length > 0) {
         const timelineText = formatTimeline(timeline)
         if (timelineText) {
           await ctx.reply(timelineText, { parse_mode: "Markdown" })
         }
+      }
+
+      const chunks = splitTextChunks(answer, 3000)
+      for (const chunk of chunks) {
+        await ctx.reply(chunk, { parse_mode: "Markdown" })
       }
 
       opts.logger.info(
