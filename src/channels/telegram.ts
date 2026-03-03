@@ -1,4 +1,4 @@
-import { Bot } from "grammy"
+import { Bot, InlineKeyboard } from "grammy"
 import type { Logger } from "pino"
 import { AssistantCore, type ProgressUpdate } from "../core/assistant"
 import { WhitelistStore } from "../core/whitelist-store"
@@ -12,6 +12,9 @@ type TelegramAdapterOptions = {
   whitelist: WhitelistStore
   pairToken?: string
 }
+
+// Track which users have cancelled their requests
+const cancelledRequests = new Set<string>()
 
 function whitelistInstruction(userID: string, filePath: string): string {
   return [
@@ -152,8 +155,11 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     let statusMessageCreatedAt: number | undefined
     let updatingStatus = true
 
+    // Create the cancel keyboard once and reuse it
+    const cancelKeyboard = new InlineKeyboard().text("❌ Cancel", `cancel:${userID}`)
+
     const sendStatusMessage = async (): Promise<void> => {
-      const msg = await ctx.reply("⏳ Processing your request...")
+      const msg = await ctx.reply("⏳ Processing your request...", { reply_markup: cancelKeyboard })
       statusMessageId = msg.message_id
       statusMessageCreatedAt = Date.now()
     }
@@ -172,7 +178,8 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
       try {
         opts.logger.debug({ text, messageId: statusMessageId }, "updating status message")
-        await ctx.api.editMessageText(ctx.chat.id, statusMessageId, text)
+        // IMPORTANT: Keep the keyboard on every update
+        await ctx.api.editMessageText(ctx.chat.id, statusMessageId, text, { reply_markup: cancelKeyboard })
         opts.logger.debug({ text }, "status message updated successfully")
       } catch (error) {
         // Check if it's just "message not modified" error (harmless)
@@ -204,8 +211,8 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Create progress callback
       let answerReceived = false
       const onProgress = (update: ProgressUpdate): void => {
-        // Don't update status after answer is received
-        if (answerReceived) return
+        // Don't update status after answer is received or cancelled
+        if (answerReceived || cancelledRequests.has(userID)) return
         
         opts.logger.debug({ updateType: update.type, toolName: (update as { name?: string }).name }, "onProgress called")
         const newText = formatStatusMessage(update)
@@ -217,14 +224,37 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         void updateStatusMessage(newText)
       }
 
-      const answer = await opts.assistant.ask(
-        {
-          channel: "telegram",
-          userID,
-          text,
-        },
-        onProgress
-      )
+      let answer: string
+      try {
+        answer = await opts.assistant.ask(
+          {
+            channel: "telegram",
+            userID,
+            text,
+          },
+          onProgress
+        )
+      } catch (askError) {
+        // Check if this was a cancellation
+        if (cancelledRequests.has(userID)) {
+          opts.logger.info({ userID, updateID: ctx.update.update_id }, "request was cancelled by user")
+          // Update status message to show cancelled
+          if (statusMessageId) {
+            try {
+              await ctx.api.editMessageText(ctx.chat.id, statusMessageId, "❌ Request cancelled")
+              // Delete the cancelled message after a brief delay
+              setTimeout(() => {
+                void ctx.api.deleteMessage(ctx.chat.id, statusMessageId!).catch(() => {})
+              }, 3000)
+            } catch {
+              // Ignore errors when updating cancelled message
+            }
+          }
+          return
+        }
+        // Re-throw other errors to be caught by outer handler
+        throw askError
+      }
 
       // Mark that answer is received - prevent further status updates
       answerReceived = true
@@ -248,6 +278,9 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         "telegram reply sent",
       )
     } catch (error) {
+      // Don't show error if request was cancelled
+      if (cancelledRequests.has(userID)) return
+
       opts.logger.error(
         {
           error,
@@ -260,9 +293,63 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       )
       await ctx.reply("I hit an internal error while preparing the reply. Check server logs.")
     } finally {
-      // Clean up status message on error too
-      await deleteStatusMessage().catch(() => {})
+      // Clean up cancelled tracking
+      const wasCancelled = cancelledRequests.has(userID)
+      cancelledRequests.delete(userID)
+      
+      // Clean up status message on error too (unless cancelled, which has its own cleanup)
+      if (!wasCancelled) {
+        await deleteStatusMessage().catch(() => {})
+      }
     }
+  })
+
+  // Handle cancel button callbacks
+  bot.callbackQuery(/cancel:(.+)/, async (ctx) => {
+    const callbackUserID = ctx.match[1]
+    const clickingUserID = String(ctx.from?.id)
+
+    // Security: only allow users to cancel their own requests
+    if (callbackUserID !== clickingUserID) {
+      await ctx.answerCallbackQuery({
+        text: "You can only cancel your own requests",
+        show_alert: true,
+      })
+      return
+    }
+
+    // Check if there's an active request
+    if (!opts.assistant.hasActiveRequest(callbackUserID)) {
+      await ctx.answerCallbackQuery({
+        text: "No active request to cancel",
+      })
+      return
+    }
+
+    // Mark request as cancelled before aborting
+    cancelledRequests.add(callbackUserID)
+
+    // Abort the request
+    const aborted = await opts.assistant.abortRequest(callbackUserID)
+
+    if (aborted) {
+      await ctx.answerCallbackQuery({
+        text: "Request cancelled",
+      })
+    } else {
+      // Remove from cancelled set if abort failed
+      cancelledRequests.delete(callbackUserID)
+      await ctx.answerCallbackQuery({
+        text: "Failed to cancel request",
+        show_alert: true,
+      })
+    }
+  })
+
+  // Handle unknown callback queries
+  bot.on("callback_query:data", async (ctx) => {
+    opts.logger.debug({ data: ctx.callbackQuery.data }, "unknown callback query")
+    await ctx.answerCallbackQuery()
   })
 
   bot.catch((err) => {

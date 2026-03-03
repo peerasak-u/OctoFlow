@@ -10,6 +10,7 @@ type AssistantInput = {
   channel: "telegram" | "system"
   userID: string
   text: string
+  signal?: AbortSignal
 }
 
 export type ProgressUpdate =
@@ -244,6 +245,7 @@ export class AssistantCore {
   private client?: OpencodeClient
   private readonly modelConfig?: { providerID: string; modelID: string }
   private readonly opts: AssistantOptions
+  private activeRequests = new Map<string, { sessionID: string; startTime: number }>()
 
   constructor(
     private readonly logger: Logger,
@@ -253,6 +255,44 @@ export class AssistantCore {
   ) {
     this.opts = opts
     this.modelConfig = buildModelConfig(opts.model)
+  }
+
+  /**
+   * Get active request info for a user
+   */
+  getActiveRequest(userID: string): { sessionID: string; startTime: number } | undefined {
+    return this.activeRequests.get(userID)
+  }
+
+  /**
+   * Abort an active request for a user
+   */
+  async abortRequest(userID: string): Promise<boolean> {
+    const request = this.activeRequests.get(userID)
+    if (!request) {
+      return false
+    }
+
+    const client = this.ensureClient()
+    try {
+      await client.session.abort({
+        path: { id: request.sessionID },
+      } as never)
+
+      this.activeRequests.delete(userID)
+      this.logger.info({ userID, sessionID: request.sessionID }, "request aborted")
+      return true
+    } catch (error) {
+      this.logger.warn({ error, userID, sessionID: request.sessionID }, "failed to abort request")
+      return false
+    }
+  }
+
+  /**
+   * Check if user has an active request
+   */
+  hasActiveRequest(userID: string): boolean {
+    return this.activeRequests.has(userID)
   }
 
   async init(): Promise<void> {
@@ -269,6 +309,9 @@ export class AssistantCore {
     if (input.channel === "telegram") {
       await saveLastChannel(input.userID)
     }
+
+    // Register this request as active
+    this.activeRequests.set(input.userID, { sessionID, startTime: startedAt })
 
     const memoryContext = await this.memory.readAll()
     const systemPrompt = buildAgentSystemPrompt(memoryContext, this.opts.heartbeatIntervalMinutes)
@@ -384,38 +427,45 @@ export class AssistantCore {
       eventUnsubscribe?.()
     }
 
-    const parsedText = await extractPromptText(response)
-    let assistantText = parsedText
+    let assistantText: string
     let usedMessagePolling = false
 
-    if (assistantText === "I could not parse the assistant response.") {
-      this.logger.warn({ sessionID }, "assistant response parse failed; polling messages")
-      const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig)
-      if (waitedReply) {
-        assistantText = waitedReply
-        usedMessagePolling = true
+    try {
+      const parsedText = await extractPromptText(response)
+      assistantText = parsedText
+
+      if (assistantText === "I could not parse the assistant response.") {
+        this.logger.warn({ sessionID }, "assistant response parse failed; polling messages")
+        const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig)
+        if (waitedReply) {
+          assistantText = waitedReply
+          usedMessagePolling = true
+        }
       }
+
+      if (assistantText === "I could not parse the assistant response.") {
+        const diag = await this.buildNoReplyDiagnostic(sessionID)
+        this.logger.error(diag, "assistant no-reply diagnostic")
+        assistantText = "I did not receive a model reply in time. Please check OpenCode provider auth/model setup."
+      }
+
+      this.logger.info(
+        {
+          channel: input.channel,
+          userID: input.userID,
+          sessionID,
+          durationMs: Date.now() - startedAt,
+          usedMessagePolling,
+          answerLength: assistantText.length,
+        },
+        "assistant request completed",
+      )
+
+      return assistantText
+    } finally {
+      // Always clean up active request tracking
+      this.activeRequests.delete(input.userID)
     }
-
-    if (assistantText === "I could not parse the assistant response.") {
-      const diag = await this.buildNoReplyDiagnostic(sessionID)
-      this.logger.error(diag, "assistant no-reply diagnostic")
-      assistantText = "I did not receive a model reply in time. Please check OpenCode provider auth/model setup."
-    }
-
-    this.logger.info(
-      {
-        channel: input.channel,
-        userID: input.userID,
-        sessionID,
-        durationMs: Date.now() - startedAt,
-        usedMessagePolling,
-        answerLength: assistantText.length,
-      },
-      "assistant request completed",
-    )
-
-    return assistantText
   }
 
   async startNewMainSession(reason = "manual"): Promise<string> {
