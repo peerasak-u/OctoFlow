@@ -1,6 +1,6 @@
-import { Bot } from "grammy"
+import { Bot, InlineKeyboard } from "grammy"
 import type { Logger } from "pino"
-import { AssistantCore } from "../core/assistant"
+import { AssistantCore, type ProgressUpdate, getToolIcon, getSkillIcon } from "../core/assistant"
 import { WhitelistStore } from "../core/whitelist-store"
 import { splitTextChunks } from "../utils/format-message"
 import { ackOutbox, listOutbox } from "../utils/outbox"
@@ -13,6 +13,9 @@ type TelegramAdapterOptions = {
   pairToken?: string
 }
 
+// Track which users have cancelled their requests
+const cancelledRequests = new Set<string>()
+
 function whitelistInstruction(userID: string, filePath: string): string {
   return [
     "Access restricted.",
@@ -20,6 +23,45 @@ function whitelistInstruction(userID: string, filePath: string): string {
     "Send /pair <token> to whitelist yourself.",
     `If you don't have a token, ask admin to add you in ${filePath}.`,
   ].join("\n")
+}
+
+// Configuration constants
+const STATUS_MESSAGE_MAX_AGE_MS = parseInt(process.env.STATUS_MESSAGE_MAX_AGE_MS ?? "1800000", 10) // 30 minutes default
+const SHOW_TOOL_TIMELINE = process.env.SHOW_TOOL_TIMELINE === "true"
+
+type TimelineAction =
+  | { type: "tool"; name: string; details?: string }
+  | { type: "skill"; name: string; details?: string }
+
+function formatTimeline(actions: TimelineAction[]): string {
+  if (actions.length === 0) return ""
+
+  const lines = actions.map((action) => {
+    const bullet = "•"
+    const icon = action.type === "tool" ? getToolIcon(action.name) : getSkillIcon(action.name)
+    const label = action.type === "tool" ? "tool" : "skill"
+    const detailText = action.details ? `\n  └ ${action.details}` : ""
+    return `${bullet} ${icon} ${label} \`${action.name}\`${detailText}`
+  })
+
+  return "**Actions taken:**\n" + lines.join("\n")
+}
+
+function formatStatusMessage(update: ProgressUpdate): string {
+  switch (update.type) {
+    case "start":
+      return "⏳ Processing your request..."
+    case "thinking":
+      return "🤔 Thinking..."
+    case "tool":
+      return `${getToolIcon(update.name)} Running tool: ${update.name}...`
+    case "skill":
+      return `${getSkillIcon(update.name)} Loading skill: ${update.name}...`
+    case "generating":
+      return "📝 Preparing your answer..."
+    default:
+      return "⏳ Processing..."
+  }
 }
 
 export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promise<void> {
@@ -34,7 +76,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       for (const item of pending) {
         const chunks = splitTextChunks(item.message.text, 3000)
         for (const chunk of chunks) {
-          await bot.api.sendMessage(item.message.userID, chunk)
+          await bot.api.sendMessage(item.message.userID, chunk, { parse_mode: "Markdown" })
         }
         await ackOutbox(item.filePath)
         opts.logger.info({ userID: item.message.userID, chunkCount: chunks.length }, "telegram proactive message sent")
@@ -129,25 +171,138 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       return
     }
 
-    let typingTimer: ReturnType<typeof setInterval> | undefined
-    try {
-      await ctx.replyWithChatAction("typing")
-      typingTimer = setInterval(() => {
-        void ctx.replyWithChatAction("typing").catch((err) => {
-          opts.logger.debug({ err, chatID: ctx.chat.id }, "failed to send typing action")
-        })
-      }, 3500)
+    let statusMessageId: number | undefined
+    let statusMessageCreatedAt: number | undefined
+    let updatingStatus = true
 
-      const answer = await opts.assistant.ask({
-        channel: "telegram",
-        userID,
-        text,
-      })
+    // Create the cancel keyboard once and reuse it
+    const cancelKeyboard = new InlineKeyboard().text("❌ Cancel", `cancel:${userID}`)
+
+    const sendStatusMessage = async (): Promise<void> => {
+      const msg = await ctx.reply("⏳ Processing your request...", { reply_markup: cancelKeyboard })
+      statusMessageId = msg.message_id
+      statusMessageCreatedAt = Date.now()
+    }
+
+    const updateStatusMessage = async (text: string): Promise<void> => {
+      if (!updatingStatus || !statusMessageId || !statusMessageCreatedAt) {
+        opts.logger.debug({ updatingStatus, hasMessageId: !!statusMessageId, hasCreatedAt: !!statusMessageCreatedAt }, "updateStatusMessage early return")
+        return
+      }
+
+      // Check if message is too old (> 30 minutes)
+      if (Date.now() - statusMessageCreatedAt > STATUS_MESSAGE_MAX_AGE_MS) {
+        updatingStatus = false
+        return
+      }
+
+      try {
+        opts.logger.debug({ text, messageId: statusMessageId }, "updating status message")
+        // IMPORTANT: Keep the keyboard on every update
+        await ctx.api.editMessageText(ctx.chat.id, statusMessageId, text, { reply_markup: cancelKeyboard })
+        opts.logger.debug({ text }, "status message updated successfully")
+      } catch (error) {
+        // Check if it's just "message not modified" error (harmless)
+        const errorMsg = String(error)
+        if (errorMsg.includes("message is not modified")) {
+          opts.logger.debug({ text }, "status update skipped - message not modified")
+          return
+        }
+        // Stop trying to update on real errors
+        updatingStatus = false
+        opts.logger.warn({ error, chatID: ctx.chat.id, messageId: statusMessageId, text }, "status update failed, stopping updates")
+      }
+    }
+
+    const deleteStatusMessage = async (): Promise<void> => {
+      if (!statusMessageId) return
+      try {
+        await ctx.api.deleteMessage(ctx.chat.id, statusMessageId)
+      } catch (error) {
+        // Ignore delete errors
+        opts.logger.debug({ error, chatID: ctx.chat.id, messageId: statusMessageId }, "status delete failed")
+      }
+    }
+
+    try {
+      // Send initial status message
+      await sendStatusMessage()
+
+      // Create progress callback
+      let answerReceived = false
+      const onProgress = (update: ProgressUpdate): void => {
+        // Don't update status after answer is received or cancelled
+        if (answerReceived || cancelledRequests.has(userID)) return
+        
+        opts.logger.debug({ updateType: update.type, toolName: (update as { name?: string }).name }, "onProgress called")
+        const newText = formatStatusMessage(update)
+        // Skip update if text is the same as current status
+        if (newText === "⏳ Processing your request...") {
+          opts.logger.debug("skipping status update - same as initial message")
+          return
+        }
+        void updateStatusMessage(newText)
+      }
+
+      let result: { answer: string; sessionID: string; toolDetails: Array<{ name: string; details?: string; type: 'tool' | 'skill' }> }
+      try {
+        result = await opts.assistant.ask(
+          {
+            channel: "telegram",
+            userID,
+            text,
+          },
+          onProgress
+        )
+      } catch (askError) {
+        // Check if this was a cancellation
+        if (cancelledRequests.has(userID)) {
+          opts.logger.info({ userID, updateID: ctx.update.update_id }, "request was cancelled by user")
+          // Update status message to show cancelled
+          if (statusMessageId) {
+            try {
+              await ctx.api.editMessageText(ctx.chat.id, statusMessageId, "❌ Request cancelled")
+              // Delete the cancelled message after a brief delay
+              setTimeout(() => {
+                void ctx.api.deleteMessage(ctx.chat.id, statusMessageId!).catch(() => {})
+              }, 3000)
+            } catch {
+              // Ignore errors when updating cancelled message
+            }
+          }
+          return
+        }
+        // Re-throw other errors to be caught by outer handler
+        throw askError
+      }
+
+      // Mark that answer is received - prevent further status updates
+      answerReceived = true
+
+      const { answer, sessionID, toolDetails } = result
+
+      // Delete status message before sending final response
+      await deleteStatusMessage()
+
+      // Send tool timeline BEFORE the final response (for paranoid users who want to audit)
+      if (SHOW_TOOL_TIMELINE && toolDetails.length > 0) {
+        // Build timeline from toolDetails returned by assistant
+        const timeline: TimelineAction[] = toolDetails.map(td => ({
+          type: td.type,
+          name: td.name,
+          details: td.details
+        }))
+        const timelineText = formatTimeline(timeline)
+        if (timelineText) {
+          await ctx.reply(timelineText, { parse_mode: "Markdown" })
+        }
+      }
 
       const chunks = splitTextChunks(answer, 3000)
       for (const chunk of chunks) {
-        await ctx.reply(chunk)
+        await ctx.reply(chunk, { parse_mode: "Markdown" })
       }
+
       opts.logger.info(
         {
           updateID: ctx.update.update_id,
@@ -156,10 +311,14 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
           durationMs: Date.now() - startedAt,
           answerLength: answer.length,
           chunkCount: chunks.length,
+          toolCount: toolDetails.length,
         },
         "telegram reply sent",
       )
     } catch (error) {
+      // Don't show error if request was cancelled
+      if (cancelledRequests.has(userID)) return
+
       opts.logger.error(
         {
           error,
@@ -172,8 +331,64 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       )
       await ctx.reply("I hit an internal error while preparing the reply. Check server logs.")
     } finally {
-      if (typingTimer) clearInterval(typingTimer)
+      // Clean up cancelled tracking
+      const wasCancelled = cancelledRequests.has(userID)
+      cancelledRequests.delete(userID)
+      
+      // Clean up status message on error too (unless cancelled, which has its own cleanup)
+      if (!wasCancelled) {
+        await deleteStatusMessage().catch(() => {})
+      }
     }
+  })
+
+  // Handle cancel button callbacks
+  // Only accept numeric userIDs for security
+  bot.callbackQuery(/cancel:(\d+)/, async (ctx) => {
+    const callbackUserID = ctx.match[1]
+    const clickingUserID = String(ctx.from?.id)
+
+    // Security: only allow users to cancel their own requests
+    if (callbackUserID !== clickingUserID) {
+      await ctx.answerCallbackQuery({
+        text: "You can only cancel your own requests",
+        show_alert: true,
+      })
+      return
+    }
+
+    // Check if there's an active request
+    if (!opts.assistant.hasActiveRequest(callbackUserID)) {
+      await ctx.answerCallbackQuery({
+        text: "No active request to cancel",
+      })
+      return
+    }
+
+    // Mark request as cancelled before aborting
+    cancelledRequests.add(callbackUserID)
+
+    // Abort the request
+    const aborted = await opts.assistant.abortRequest(callbackUserID)
+
+    if (aborted) {
+      await ctx.answerCallbackQuery({
+        text: "Request cancelled",
+      })
+    } else {
+      // Remove from cancelled set if abort failed
+      cancelledRequests.delete(callbackUserID)
+      await ctx.answerCallbackQuery({
+        text: "Failed to cancel request",
+        show_alert: true,
+      })
+    }
+  })
+
+  // Handle unknown callback queries
+  bot.on("callback_query:data", async (ctx) => {
+    opts.logger.debug({ data: ctx.callbackQuery.data }, "unknown callback query")
+    await ctx.answerCallbackQuery()
   })
 
   bot.catch((err) => {

@@ -10,7 +10,17 @@ type AssistantInput = {
   channel: "telegram" | "system"
   userID: string
   text: string
+  signal?: AbortSignal
 }
+
+export type ProgressUpdate =
+  | { type: "start" }
+  | { type: "thinking" }
+  | { type: "tool"; name: string; details?: string }
+  | { type: "skill"; name: string; details?: string }
+  | { type: "generating" }
+
+export type ProgressCallback = (update: ProgressUpdate) => void
 
 type AssistantOptions = {
   model?: string
@@ -26,6 +36,38 @@ type OpencodeClient = ReturnType<typeof createOpencodeClient>
 type OpencodeRuntime = {
   client: OpencodeClient
   close?: () => Promise<void> | void
+}
+
+// Constants for event processing
+const MAX_TOOL_DETAIL_LENGTH = 80
+const DEFAULT_TOOL_DETAIL_TRUNCATION = 60
+
+// Tool icons for progress updates (can be customized via env or config)
+export const TOOL_ICONS: Record<string, string> = {
+  bash: process.env.TOOL_ICON_BASH ?? "🔧",
+  webfetch: process.env.TOOL_ICON_WEBFETCH ?? "🌐",
+  read: process.env.TOOL_ICON_READ ?? "📖",
+  write: process.env.TOOL_ICON_WRITE ?? "✏️",
+  edit: process.env.TOOL_ICON_EDIT ?? "✏️",
+  grep: process.env.TOOL_ICON_GREP ?? "🔍",
+  glob: process.env.TOOL_ICON_GLOB ?? "📁",
+  install_skill: process.env.TOOL_ICON_SKILL ?? "📚",
+  save_memory: process.env.TOOL_ICON_MEMORY ?? "💾",
+  default: process.env.TOOL_ICON_DEFAULT ?? "🔧",
+}
+
+export const SKILL_ICONS: Record<string, string> = {
+  default: process.env.SKILL_ICON_DEFAULT ?? "📚",
+}
+
+// Get icon for a tool name
+export function getToolIcon(toolName: string): string {
+  return TOOL_ICONS[toolName] ?? TOOL_ICONS.default
+}
+
+// Get icon for a skill name
+export function getSkillIcon(skillName: string): string {
+  return SKILL_ICONS[skillName] ?? SKILL_ICONS.default
 }
 
 function unwrap<T>(value: unknown): T {
@@ -84,7 +126,14 @@ async function extractPromptText(result: unknown): Promise<string> {
 
 type SessionMessage = {
   info?: { id?: string; role?: string }
-  parts?: Array<{ type?: string; text?: string }>
+  parts?: Array<{
+    id?: string
+    type?: string
+    text?: string
+    tool?: string
+    input?: unknown
+    state?: { status?: string }
+  }>
 }
 
 function toMessages(value: unknown): SessionMessage[] {
@@ -138,6 +187,116 @@ function safeString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
+function isSkillTool(toolName: string): boolean {
+  const name = toolName.toLowerCase()
+  // Tools containing "_skill" or starting with "skill_"
+  if (name.includes("_skill") || name.startsWith("skill_")) {
+    return true
+  }
+  // Known skill tools
+  const knownSkills = [
+    "install_skill",
+    "skill_creator",
+    "humanize",
+    "pr_creator",
+    "code_reviewer",
+    "bun_file_io",
+    "deep_research",
+    "docs_writer",
+    "gog",
+    "apple_notes",
+    "agent_browser",
+  ]
+  return knownSkills.includes(name)
+}
+
+function formatToolInput(toolName: string, input: Record<string, unknown>): string | undefined {
+  try {
+    // Check if input is empty or has no keys
+    if (!input || Object.keys(input).length === 0) {
+      return undefined
+    }
+    
+    // Tool-specific formatting for input arguments
+    switch (toolName) {
+      case "bash": {
+        const command = input.command || input.cmd || input.input
+        if (typeof command === "string" && command.length > 0) {
+          return command.length > 80 ? command.slice(0, 80) + "..." : command
+        }
+        break
+      }
+      case "webfetch": {
+        const url = input.url || input.input
+        if (typeof url === "string" && url.length > 0) {
+          return url.length > 80 ? url.slice(0, 80) + "..." : url
+        }
+        break
+      }
+      case "read":
+      case "write":
+      case "edit": {
+        const path = input.filePath || input.path || input.file
+        if (typeof path === "string" && path.length > 0) {
+          // Show relative path or last part
+          const shortPath = path.includes("/") ? path.split("/").slice(-2).join("/") : path
+          return shortPath.length > 60 ? shortPath.slice(0, 60) + "..." : shortPath
+        }
+        break
+      }
+      case "glob": {
+        const pattern = input.pattern
+        if (typeof pattern === "string" && pattern.length > 0) {
+          return pattern
+        }
+        break
+      }
+      case "grep": {
+        const pattern = input.pattern
+        const path = input.path
+        if (typeof pattern === "string" && pattern.length > 0) {
+          const pathStr = typeof path === "string" ? ` in ${path.split("/").pop()}` : ""
+          return `${pattern}${pathStr}`
+        }
+        break
+      }
+      case "install_skill": {
+        const source = input.source
+        if (typeof source === "string" && source.length > 0) {
+          const shortSource = source.includes("/") ? source.split("/").slice(-2).join("/") : source
+          return shortSource
+        }
+        break
+      }
+      case "save_memory": {
+        const fact = input.fact
+        if (typeof fact === "string" && fact.length > 0) {
+          return fact.length > 60 ? fact.slice(0, 60) + "..." : fact
+        }
+        break
+      }
+      default: {
+        // For unknown tools, show first string argument
+        for (const [key, value] of Object.entries(input)) {
+          if (typeof value === "string" && value.length > 0) {
+            const shortValue = value.length > 60 ? value.slice(0, 60) + "..." : value
+            return `${key}: ${shortValue}`
+          }
+        }
+      }
+    }
+    
+    // Fallback: show truncated JSON only if we couldn't extract anything specific
+    const json = JSON.stringify(input)
+    if (json !== "{}" && json.length > 0) {
+      return json.length > 80 ? json.slice(0, 80) + "..." : json
+    }
+    
+    return undefined
+  } catch {
+    return undefined
+  }
+}
 
 function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number): string {
   return [
@@ -205,6 +364,7 @@ export class AssistantCore {
   private client?: OpencodeClient
   private readonly modelConfig?: { providerID: string; modelID: string }
   private readonly opts: AssistantOptions
+  private activeRequests = new Map<string, { sessionID: string; startTime: number }>()
 
   constructor(
     private readonly logger: Logger,
@@ -216,13 +376,127 @@ export class AssistantCore {
     this.modelConfig = buildModelConfig(opts.model)
   }
 
+  /**
+   * Get active request info for a user
+   */
+  getActiveRequest(userID: string): { sessionID: string; startTime: number } | undefined {
+    return this.activeRequests.get(userID)
+  }
+
+  /**
+   * Abort an active request for a user
+   */
+  async abortRequest(userID: string): Promise<boolean> {
+    const request = this.activeRequests.get(userID)
+    if (!request) {
+      return false
+    }
+
+    const client = this.ensureClient()
+    try {
+      await client.session.abort({
+        path: { id: request.sessionID },
+      } as never)
+
+      this.activeRequests.delete(userID)
+      this.logger.info({ userID, sessionID: request.sessionID }, "request aborted")
+      return true
+    } catch (error) {
+      this.logger.warn({ error, userID, sessionID: request.sessionID }, "failed to abort request")
+      return false
+    }
+  }
+
+  /**
+   * Check if user has an active request
+   */
+  hasActiveRequest(userID: string): boolean {
+    return this.activeRequests.has(userID)
+  }
+
+  /**
+   * Process SDK events for tool/skill detection with proper cancellation
+   */
+  private async trackToolEvents(
+    reader: AsyncIterator<unknown>,
+    sessionID: string,
+    onProgress: ProgressCallback,
+    abortSignal: AbortSignal,
+    reportedTools: Map<string, { name: string; details?: string }>
+  ): Promise<void> {
+
+    try {
+      while (!abortSignal.aborted) {
+        const { done, value } = await reader.next()
+        if (done) break
+
+        const event = value as { type?: string; properties?: { part?: unknown } }
+
+        // Only process events for our session
+        const part = event?.properties?.part as {
+          id?: string
+          callID?: string
+          type?: string
+          sessionID?: string
+          tool?: string
+          state?: {
+            status?: string
+            input?: Record<string, unknown>
+          }
+        }
+
+        if (!part || part.sessionID !== sessionID) continue
+        if (part.type !== "tool") continue
+
+        const callID = part.callID || part.id || "unknown"
+        const toolName = part.tool || "unknown"
+        const toolState = part.state?.status
+        const toolInput = part.state?.input
+
+        // Check if we've already reported this tool call
+        const alreadyReported = reportedTools.has(callID)
+
+        // Extract tool input details from the state
+        const details = toolInput ? formatToolInput(toolName, toolInput) : undefined
+
+        // Update our tracking
+        if (!alreadyReported) {
+          // First time seeing this tool call - report it
+          reportedTools.set(callID, { name: toolName, details })
+
+          this.logger.info(
+            {
+              toolName,
+              toolState,
+              isSkill: isSkillTool(toolName),
+              hasDetails: !!details,
+            },
+            "tool started"
+          )
+
+          // Report tool with details if available
+          if (isSkillTool(toolName)) {
+            onProgress({ type: "skill", name: toolName, details })
+          } else {
+            onProgress({ type: "tool", name: toolName, details })
+          }
+        } else if (details && !reportedTools.get(callID)?.details) {
+          // We've seen this tool before but now we have details - update tracking
+          reportedTools.set(callID, { name: toolName, details })
+        }
+      }
+    } catch (error) {
+      this.logger.debug({ error, sessionID }, "event processing error")
+    }
+  }
+
   async init(): Promise<void> {
     await this.setupRuntime()
     await this.memory.init()
     await this.sessions.init()
   }
 
-  async ask(input: AssistantInput): Promise<string> {
+  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<{ answer: string; sessionID: string; toolDetails: Array<{ name: string; details?: string; type: 'tool' | 'skill' }> }> {
     const startedAt = Date.now()
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
@@ -230,6 +504,9 @@ export class AssistantCore {
     if (input.channel === "telegram") {
       await saveLastChannel(input.userID)
     }
+
+    // Register this request as active
+    this.activeRequests.set(input.userID, { sessionID, startTime: startedAt })
 
     const memoryContext = await this.memory.readAll()
     const systemPrompt = buildAgentSystemPrompt(memoryContext, this.opts.heartbeatIntervalMinutes)
@@ -246,6 +523,8 @@ export class AssistantCore {
     )
 
     let beforeAssistantSig = ""
+    const reportedTools = new Map<string, { name: string; details?: string }>() // callID -> { name, details }
+    
     try {
       const beforeMessagesResult = await client.session.messages({
         path: { id: sessionID },
@@ -256,8 +535,37 @@ export class AssistantCore {
       this.logger.warn({ error, sessionID }, "assistant preload messages failed")
     }
 
+    onProgress?.({ type: "start" })
+
     let response: unknown
+    let eventUnsubscribe: (() => void) | undefined
+    
     try {
+      if (onProgress) {
+        onProgress({ type: "thinking" })
+        
+        // Subscribe to events for real-time tool/skill detection
+        try {
+          const eventStream = await client.event.subscribe()
+          
+          if (eventStream?.stream) {
+            const reader = eventStream.stream[Symbol.asyncIterator]()
+            const abortController = new AbortController()
+
+            // Store cleanup function to abort event processing
+            eventUnsubscribe = () => {
+              abortController.abort()
+              reader.return?.(undefined).catch(() => {})
+            }
+
+            // Start processing events in background using extracted method
+            void this.trackToolEvents(reader, sessionID, onProgress, abortController.signal, reportedTools)
+          }
+        } catch (error) {
+          this.logger.debug({ error, sessionID }, "event subscription failed, continuing without progress tracking")
+        }
+      }
+
       response = await client.session.prompt({
         path: { id: sessionID },
         body: {
@@ -270,40 +578,58 @@ export class AssistantCore {
     } catch (error) {
       this.logger.error({ error, sessionID }, "assistant prompt call failed")
       throw error
+    } finally {
+      // Clean up event subscription
+      eventUnsubscribe?.()
     }
 
-    const parsedText = await extractPromptText(response)
-    let assistantText = parsedText
+    let assistantText: string
     let usedMessagePolling = false
 
-    if (assistantText === "I could not parse the assistant response.") {
-      this.logger.warn({ sessionID }, "assistant response parse failed; polling messages")
-      const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig)
-      if (waitedReply) {
-        assistantText = waitedReply
-        usedMessagePolling = true
+    try {
+      const parsedText = await extractPromptText(response)
+      assistantText = parsedText
+
+      if (assistantText === "I could not parse the assistant response.") {
+        this.logger.warn({ sessionID }, "assistant response parse failed; polling messages")
+        const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig)
+        if (waitedReply) {
+          assistantText = waitedReply
+          usedMessagePolling = true
+        }
       }
+
+      if (assistantText === "I could not parse the assistant response.") {
+        const diag = await this.buildNoReplyDiagnostic(sessionID)
+        this.logger.error(diag, "assistant no-reply diagnostic")
+        assistantText = "I did not receive a model reply in time. Please check OpenCode provider auth/model setup."
+      }
+
+      this.logger.info(
+        {
+          channel: input.channel,
+          userID: input.userID,
+          sessionID,
+          durationMs: Date.now() - startedAt,
+          usedMessagePolling,
+          answerLength: assistantText.length,
+          toolCount: reportedTools.size,
+        },
+        "assistant request completed",
+      )
+
+      // Convert reported tools map to array for return
+      const toolDetails = Array.from(reportedTools.entries()).map(([callID, data]) => ({
+        name: data.name,
+        details: data.details,
+        type: isSkillTool(data.name) ? 'skill' as const : 'tool' as const,
+      }))
+
+      return { answer: assistantText, sessionID, toolDetails }
+    } finally {
+      // Always clean up active request tracking
+      this.activeRequests.delete(input.userID)
     }
-
-    if (assistantText === "I could not parse the assistant response.") {
-      const diag = await this.buildNoReplyDiagnostic(sessionID)
-      this.logger.error(diag, "assistant no-reply diagnostic")
-      assistantText = "I did not receive a model reply in time. Please check OpenCode provider auth/model setup."
-    }
-
-    this.logger.info(
-      {
-        channel: input.channel,
-        userID: input.userID,
-        sessionID,
-        durationMs: Date.now() - startedAt,
-        usedMessagePolling,
-        answerLength: assistantText.length,
-      },
-      "assistant request completed",
-    )
-
-    return assistantText
   }
 
   async startNewMainSession(reason = "manual"): Promise<string> {
