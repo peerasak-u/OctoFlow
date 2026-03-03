@@ -86,13 +86,17 @@ install_bun_systemwide() {
     # Use official Bun installer
     curl -fsSL https://bun.sh/install | bash
     
+    # Add to PATH for this session
+    export PATH="$HOME/.bun/bin:$PATH"
+    
     # Create symlink for system-wide access
     if [ -f "$HOME/.bun/bin/bun" ]; then
         ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
+        chmod +x /usr/local/bin/bun
         log_info "Bun installed to /usr/local/bin/bun"
         echo "/usr/local/bin/bun"
     else
-        log_error "Bun installation failed"
+        log_error "Bun installation failed - binary not found at $HOME/.bun/bin/bun"
         exit 1
     fi
 }
