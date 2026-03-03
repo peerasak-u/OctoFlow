@@ -18,10 +18,14 @@ This project is set up to reuse OpenCode's existing auth mechanisms.
 
 ## Quick Install (One Command)
 
-For Raspberry Pi or Debian/Ubuntu systems:
+For **Raspberry Pi**, **Linux**, or **macOS**:
 
 ```bash
+# Linux (with sudo)
 curl -fsSL https://raw.githubusercontent.com/peerasak-u/OctoFlow/main/scripts/install-pi.sh | sudo bash
+
+# macOS (no sudo needed)
+curl -fsSL https://raw.githubusercontent.com/peerasak-u/OctoFlow/main/scripts/install-pi.sh | bash
 ```
 
 That's it! The installer handles everything:
