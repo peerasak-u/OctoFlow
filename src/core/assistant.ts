@@ -552,65 +552,91 @@ export class AssistantCore {
     const client = this.ensureClient()
     const details = new Map<string, string>()
     
-    try {
-      const messagesResult = await client.session.messages({
-        path: { id: sessionID },
-      } as never)
-      const messages = toMessages(messagesResult)
-      
-      this.logger.info({ 
-        sessionID, 
-        toolNames, 
-        messageCount: messages.length,
-        lastMessageRole: messages[messages.length - 1]?.info?.role 
-      }, "fetching tool details from session")
-      
-      // Find tool calls for each tool name
-      for (const toolName of toolNames) {
-        if (details.has(toolName)) continue // Already found
+    // Retry logic: messages might be written asynchronously
+    let attempt = 0
+    const maxAttempts = 10
+    const delayMs = 500
+    
+    while (attempt < maxAttempts && details.size < toolNames.length) {
+      try {
+        const messagesResult = await client.session.messages({
+          path: { id: sessionID },
+        } as never)
+        const messages = toMessages(messagesResult)
         
-        // Search from most recent to oldest
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const msg = messages[i]
-          const msgParts = msg.parts || []
+        this.logger.info({ 
+          sessionID, 
+          toolNames, 
+          attempt,
+          messageCount: messages.length,
+          lastMessageRole: messages[messages.length - 1]?.info?.role 
+        }, "fetching tool details from session")
+        
+        // Find tool calls for each tool name we haven't found yet
+        for (const toolName of toolNames) {
+          if (details.has(toolName)) continue // Already found
           
-          for (const msgPart of msgParts) {
-            // Debug: log all tool parts found
-            if (msgPart.type === "tool") {
-              this.logger.debug({
-                foundTool: msgPart.tool,
-                lookingFor: toolName,
-                hasInput: !!msgPart.input,
-                inputType: msgPart.input ? typeof msgPart.input : 'none',
-                inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : [],
-                inputSample: msgPart.input ? JSON.stringify(msgPart.input).slice(0, 200) : null
-              }, "checking tool part")
-            }
+          // Search from most recent to oldest
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i]
+            const msgParts = msg.parts || []
             
-            if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
-              const detail = formatToolDetails(toolName, msgPart.input)
-              this.logger.info({ toolName, detail, input: msgPart.input }, "found tool detail")
-              if (detail) {
-                details.set(toolName, detail)
-                break
+            for (const msgPart of msgParts) {
+              // Debug: log all tool parts found
+              if (msgPart.type === "tool") {
+                this.logger.debug({
+                  foundTool: msgPart.tool,
+                  lookingFor: toolName,
+                  hasInput: !!msgPart.input,
+                  inputType: msgPart.input ? typeof msgPart.input : 'none',
+                  inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : [],
+                  inputSample: msgPart.input ? JSON.stringify(msgPart.input).slice(0, 200) : null
+                }, "checking tool part")
+              }
+              
+              if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
+                const detail = formatToolDetails(toolName, msgPart.input)
+                this.logger.info({ toolName, detail, input: msgPart.input }, "found tool detail")
+                if (detail) {
+                  details.set(toolName, detail)
+                  break
+                }
               }
             }
+            if (details.has(toolName)) break
           }
-          if (details.has(toolName)) break
         }
         
-        if (!details.has(toolName)) {
-          this.logger.warn({ toolName }, "tool not found in session messages")
+        // If we found all tools, break early
+        if (details.size === toolNames.length) {
+          break
         }
+        
+        // Wait before next attempt
+        if (attempt < maxAttempts - 1) {
+          this.logger.info({ attempt, foundSoFar: details.size, totalNeeded: toolNames.length }, "waiting for messages to be persisted")
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+        }
+        
+      } catch (error) {
+        this.logger.error({ error, sessionID, toolNames, attempt }, "failed to fetch session tool details")
       }
-    } catch (error) {
-      this.logger.error({ error, sessionID, toolNames }, "failed to fetch session tool details")
+      
+      attempt++
+    }
+    
+    // Log missing tools
+    for (const toolName of toolNames) {
+      if (!details.has(toolName)) {
+        this.logger.warn({ toolName, attempts: attempt }, "tool not found in session messages after all retries")
+      }
     }
     
     this.logger.info({ 
       sessionID, 
       foundDetails: Array.from(details.entries()),
-      requestedTools: toolNames 
+      requestedTools: toolNames,
+      attempts: attempt 
     }, "tool details fetch result")
     
     return details
