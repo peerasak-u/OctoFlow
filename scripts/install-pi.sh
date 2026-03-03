@@ -83,41 +83,18 @@ detect_bun() {
 install_bun_systemwide() {
     log_info "Installing Bun system-wide..."
     
-    # Download and install to /usr/local/bin
-    local temp_dir=$(mktemp -d)
-    cd "$temp_dir"
+    # Use official Bun installer
+    curl -fsSL https://bun.sh/install | bash
     
-    # Detect architecture
-    local arch=$(uname -m)
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    
-    case "$arch" in
-        x86_64)
-            arch="x64"
-            ;;
-        aarch64|arm64)
-            arch="aarch64"
-            ;;
-        *)
-            log_error "Unsupported architecture: $arch"
-            exit 1
-            ;;
-    esac
-    
-    log_info "Downloading Bun for $os-$arch..."
-    curl -fsSL "https://github.com/oven-sh/bun/releases/latest/download/bun-$os-$arch.zip" -o bun.zip
-    unzip -q bun.zip
-    
-    # Move to system location
-    mv "bun-$os-$arch/bun" /usr/local/bin/bun
-    chmod +x /usr/local/bin/bun
-    
-    # Cleanup
-    cd /
-    rm -rf "$temp_dir"
-    
-    log_info "Bun installed to /usr/local/bin/bun"
-    echo "/usr/local/bin/bun"
+    # Create symlink for system-wide access
+    if [ -f "$HOME/.bun/bin/bun" ]; then
+        ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
+        log_info "Bun installed to /usr/local/bin/bun"
+        echo "/usr/local/bin/bun"
+    else
+        log_error "Bun installation failed"
+        exit 1
+    fi
 }
 
 # Install system dependencies
