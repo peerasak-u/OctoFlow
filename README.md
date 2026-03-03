@@ -1,142 +1,190 @@
 # OctoFlow
 
-OctoFlow is a minimal implementation of an AI assistant using the OpenCode SDK.
+OctoFlow is a minimal AI assistant built on the OpenCode SDK.
 
-- Telegram adapter (`grammy`)
-- Single markdown memory file (`MEMORY.md`) loaded on every message
-- Proactive memory updates via an OpenCode plugin tool (`save_memory`)
-- Heartbeat task runner (periodic checklist from `heartbeat.md`)
-- Channel-level whitelist with disk persistence
+- **Telegram bot** (via `grammy`)
+- **Simple memory** (single markdown file)
+- **Proactive messaging** (via `save_memory` tool)
+- **Periodic tasks** (heartbeat runner)
+- **Access control** (channel whitelist)
 
-## Auth model (OpenCode-native)
+## Quick Start
 
-This project is set up to reuse OpenCode's existing auth mechanisms.
-
-- Default path: uses `createOpencode(...)` so SDK starts/manages a local OpenCode server and uses OpenCode auth/config.
-- Alternate path: set `OPENCODE_SERVER_URL` to connect to an already-running OpenCode server/client setup.
-- No app-specific API key is required in this repo.
-
-## Quick Install (One Command)
-
-For **Raspberry Pi**, **Linux**, or **macOS**:
+### 1. Clone & Install
 
 ```bash
-# Linux (with sudo)
-curl -fsSL https://raw.githubusercontent.com/peerasak-u/OctoFlow/main/scripts/install-pi.sh | sudo bash
-
-# macOS (no sudo needed)
-curl -fsSL https://raw.githubusercontent.com/peerasak-u/OctoFlow/main/scripts/install-pi.sh | bash
-```
-
-That's it! The installer handles everything:
-1. Installs Bun (if needed)
-2. Clones OctoFlow to `/opt/octoflow`
-3. Creates the `octoflow` service user
-4. Runs interactive setup (Telegram config, etc.)
-5. Installs systemd service
-
-After installation:
-
-```bash
-octoflow start      # Start the service
-octoflow status     # Check if running
-octoflow logs       # View logs
-octoflow --help     # See all commands
-```
-
-## Manual Setup
-
-If you prefer manual installation or are on macOS/other systems:
-
-1. Install Bun and dependencies:
-
-```bash
-# install bun
-curl -fsSL https://bun.com/install | bash
-
-# clone repo
-git clone https://github.com/peerasak-u/OctoFlow.git && cd OctoFlow
-
-# install
+git clone https://github.com/peerasak-u/OctoFlow.git
+cd OctoFlow
 bun install
 ```
 
-2. Log in using the OpenCode CLI:
+### 2. Install CLI Globally
 
 ```bash
-bun run opencode auth login
+bun link
 ```
 
-Then open the TUI with `bun run opencode` and pick a model using `/models`.
+Now you can use `octoflow` from anywhere.
 
-3. Create the env file:
-
-```bash
-cp .env.example .env
-```
-
-4. Fill required values in `.env` (manually or via the setup script below):
-
-- `TELEGRAM_BOT_TOKEN` (if Telegram enabled)
-
-Optional:
-
-- `OPENCODE_MODEL` in `provider/model` format
-- `HEARTBEAT_INTERVAL_MINUTES` (default 30)
-- `HEARTBEAT_FILE` (default `.data/heartbeat.md`; empty file disables heartbeat)
-- `WHITELIST_FILE` (default `.data/whitelist.json`)
-- `WHITELIST_PAIR_TOKEN` (required for self-pairing via chat command)
-
-5. Run:
+### 3. Configure
 
 ```bash
-bun run dev
-```
-
-To keep it running after an SSH session ends:
-
-```bash
-nohup bun run dev > octoflow.log 2>&1 &
-disown
-```
-
-## CLI Onboarding
-
-Run the interactive setup to configure channels and auth:
-
-```bash
-bun run setup
+octoflow setup
 ```
 
 This will:
-- Enable Telegram
-- Capture bot token
-- Update `.env`
-- Check OpenCode model auth (launches `opencode` if missing)
+- Ask for your Telegram bot token (get one from [@BotFather](https://t.me/botfather))
+- Set up OpenCode authentication
+- Create `.env` file
 
-## OpenCode E2E health check
+### 4. Run
 
-Run a local end-to-end check that starts its own OpenCode server via SDK, sends a prompt, and verifies a model reply:
+**Option A: Foreground mode** (for testing, shows logs)
+```bash
+octoflow start
+# Press Ctrl+C to stop
+```
+
+**Option B: Background service** (runs even after you close terminal)
+```bash
+# Install service (one-time setup)
+octoflow install-service
+
+# Start/stop service
+octoflow service start
+octoflow service stop
+octoflow service restart
+octoflow service status
+```
+
+## CLI Commands
 
 ```bash
+octoflow --help              # Show all commands
+
+# Foreground mode (development/testing)
+octoflow start               # Start bot in terminal
+octoflow stop                # Stop foreground bot
+octoflow dev                 # Start with auto-reload
+octoflow status              # Check if running
+
+# Background service (production)
+octoflow install-service     # Install LaunchAgent/service
+octoflow service start       # Start background service
+octoflow service stop        # Stop background service
+octoflow service restart     # Restart service
+octoflow service status      # Check service status
+
+# Configuration
+octoflow setup               # Run setup wizard
+octoflow logs                # View recent logs
+```
+
+## Platform Notes
+
+### macOS
+- No sudo required
+- Uses LaunchAgent (user-level service)
+- Install with: `bun link`
+- Service runs automatically on login after `install-service`
+
+### Linux (Raspberry Pi, etc.)
+- Same commands as macOS
+- Uses systemd (requires sudo for service install)
+- Service runs as current user
+
+## Telegram Commands
+
+Once your bot is running, message it on Telegram:
+
+- **Any message** - Chat with the AI assistant
+- `/remember <text>` - Save something to memory permanently
+- `/new` - Start a new conversation session
+- `/pair <token>` - Whitelist your account (if pair token is set)
+
+## Project Structure
+
+```
+OctoFlow/
+├── src/
+│   ├── index.ts              # Main entry point
+│   ├── cli/                  # CLI commands
+│   │   ├── octoflow.ts       # Main CLI
+│   │   └── setup.ts          # Setup wizard
+│   ├── channels/
+│   │   └── telegram.ts       # Telegram bot adapter
+│   └── core/
+│       └── assistant.ts      # OpenCode integration
+├── .data/                    # Runtime data (created automatically)
+│   ├── workspace/
+│   │   └── MEMORY.md         # Bot's memory
+│   ├── sessions.json         # Session storage
+│   └── whitelist.json        # Allowed users
+├── .env                      # Your config (created by setup)
+└── package.json
+```
+
+## Environment Variables
+
+The `octoflow setup` command creates a `.env` file. You can also edit it manually:
+
+```bash
+# Required
+TELEGRAM_BOT_TOKEN=your_token_here
+ENABLE_TELEGRAM=true
+
+# Optional
+OPENCODE_MODEL=provider/model        # Default model
+WHITELIST_PAIR_TOKEN=secret123       # For /pair command
+HEARTBEAT_INTERVAL_MINUTES=30        # Periodic task interval
+```
+
+## Development
+
+```bash
+# Run in development mode (auto-reload on file changes)
+bun run dev
+
+# Type check
+bun run typecheck
+
+# Test OpenCode connection
 bun run test:opencode:e2e
 ```
 
-## Commands
+## How It Works
 
-In Telegram chat:
+1. **OpenCode SDK**: The bot uses OpenCode's SDK to communicate with AI models
+2. **Memory**: Each message includes context from `MEMORY.md`
+3. **Tools**: The bot can call `save_memory` to update its own memory
+4. **Heartbeat**: Periodically runs tasks from `.data/heartbeat.md`
+5. **Multi-channel**: Supports Telegram (more channels can be added)
 
-- `/remember <text>`: force-save durable memory in `.data/workspace/MEMORY.md`
-- `/pair <token>`: add your account to whitelist (if pairing token is configured)
-- `/new`: start a new shared main OpenCode session across all channels
-- Any normal message: sent to OpenCode SDK session, with relevant memory context injected
+## Troubleshooting
 
-## Data layout
+**"Command not found: octoflow"**
+```bash
+# Make sure bun is in your PATH
+export PATH="$HOME/.bun/bin:$PATH"
 
-- `.data/sessions.json`: shared `mainSessionID` + separate `heartbeatSessionID`
-- `.data/workspace/MEMORY.md`: durable user memory (single memory file)
-- `.data/whitelist.json`: allowed Telegram accounts
+# Re-link if needed
+cd OctoFlow && bun link
+```
 
-## Security
+**Service won't start**
+```bash
+# Check logs
+tail -f ~/Workspace/indie/MonClaw/octoflow.error.log
 
-- Warning: This project is experimental. Use at your own risk and exercise extreme care and caution, especially in production or with sensitive data.
+# Try foreground mode to see errors
+octoflow start
+```
+
+**Telegram bot not responding**
+- Make sure your bot token is correct in `.env`
+- Check that `ENABLE_TELEGRAM=true` is set
+- Try restarting: `octoflow service restart`
+
+## License
+
+MIT - Use at your own risk. This is experimental software.

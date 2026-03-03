@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "octoflow": "./src/cli/octoflow.ts"
+  },
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "setup": "bun src/cli/setup.ts",
+    "octoflow": "bun src/cli/octoflow.ts",
     "opencode": "opencode",
     "typecheck": "tsc --noEmit",
     "test:opencode:e2e": "bun tests/opencode.e2e.ts"
