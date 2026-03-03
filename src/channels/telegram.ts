@@ -27,6 +27,25 @@ function whitelistInstruction(userID: string, filePath: string): string {
 
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
 
+const SHOW_TOOL_TIMELINE = process.env.SHOW_TOOL_TIMELINE === "true"
+
+type TimelineAction =
+  | { type: "tool"; name: string }
+  | { type: "skill"; name: string }
+
+function formatTimeline(actions: TimelineAction[]): string {
+  if (actions.length === 0) return ""
+
+  const lines = actions.map((action, index) => {
+    const bullet = "•"
+    const icon = action.type === "tool" ? "🔧" : "📚"
+    const label = action.type === "tool" ? "tool" : "skill"
+    return `${bullet} ${icon} ${label} \`${action.name}\``
+  })
+
+  return "**Actions taken:**\n" + lines.join("\n")
+}
+
 function formatStatusMessage(update: ProgressUpdate): string {
   switch (update.type) {
     case "start":
@@ -208,11 +227,21 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Send initial status message
       await sendStatusMessage()
 
+      // Track timeline of actions
+      const timeline: TimelineAction[] = []
+
       // Create progress callback
       let answerReceived = false
       const onProgress = (update: ProgressUpdate): void => {
         // Don't update status after answer is received or cancelled
         if (answerReceived || cancelledRequests.has(userID)) return
+        
+        // Track tool and skill calls for timeline
+        if (update.type === "tool" && "name" in update) {
+          timeline.push({ type: "tool", name: update.name })
+        } else if (update.type === "skill" && "name" in update) {
+          timeline.push({ type: "skill", name: update.name })
+        }
         
         opts.logger.debug({ updateType: update.type, toolName: (update as { name?: string }).name }, "onProgress called")
         const newText = formatStatusMessage(update)
@@ -266,6 +295,15 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       for (const chunk of chunks) {
         await ctx.reply(chunk, { parse_mode: "Markdown" })
       }
+
+      // Send tool timeline if enabled and there were actions
+      if (SHOW_TOOL_TIMELINE && timeline.length > 0) {
+        const timelineText = formatTimeline(timeline)
+        if (timelineText) {
+          await ctx.reply(timelineText, { parse_mode: "Markdown" })
+        }
+      }
+
       opts.logger.info(
         {
           updateID: ctx.update.update_id,
@@ -274,6 +312,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
           durationMs: Date.now() - startedAt,
           answerLength: answer.length,
           chunkCount: chunks.length,
+          timelineActions: timeline.length,
         },
         "telegram reply sent",
       )
