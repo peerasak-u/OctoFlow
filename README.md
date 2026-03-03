@@ -1,8 +1,8 @@
-# ZiroClaw
+# OctoFlow
 
-![ZiroClaw Telegram](openclaw-telegram.png)
+![OctoFlow Telegram](octoflow-telegram.png)
 
-ZiroClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
+OctoFlow is a minimal implementation of an AI assistant using the OpenCode SDK.
 
 - Telegram adapter (`grammy`)
 - Single markdown memory file (`MEMORY.md`) loaded on every message
@@ -27,7 +27,7 @@ This project is set up to reuse OpenCode's existing auth mechanisms.
 curl -fsSL https://bun.com/install | bash
 
 # clone repo
-git clone https://github.com/peerasak-u/ZiroClaw.git && cd ZiroClaw
+git clone https://github.com/peerasak-u/OctoFlow.git && cd OctoFlow
 
 # install
 bun install
@@ -68,7 +68,7 @@ bun run dev
 To keep it running after an SSH session ends:
 
 ```bash
-nohup bun run dev > ziroclaw.log 2>&1 &
+nohup bun run dev > octoflow.log 2>&1 &
 disown
 ```
 

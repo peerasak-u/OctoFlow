@@ -1,5 +1,5 @@
 [Unit]
-Description=ZiroClaw AI Assistant
+Description=OctoFlow AI Assistant
 After=network.target
 
 [Service]

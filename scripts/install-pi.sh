@@ -8,9 +8,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="/opt/ziroclaw"
-SERVICE_USER="ziroclaw"
-REPO_URL="https://github.com/peerasak-u/ZiroClaw.git"
+INSTALL_DIR="/opt/octoflow"
+SERVICE_USER="octoflow"
+REPO_URL="https://github.com/peerasak-u/OctoFlow.git"
 
 # Helper functions
 log_info() {
@@ -163,30 +163,30 @@ set_ownership() {
 
 # Generate CLI wrapper
 generate_cli_wrapper() {
-    log_info "Generating ziroclaw CLI wrapper..."
+    log_info "Generating octoflow CLI wrapper..."
     
-    local wrapper_path="/usr/local/bin/ziroclaw"
+    local wrapper_path="/usr/local/bin/octoflow"
     
     cat > "$wrapper_path" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
 
-WORK_DIR="/opt/ziroclaw"
-SERVICE_NAME="ziroclaw"
+WORK_DIR="/opt/octoflow"
+SERVICE_NAME="octoflow"
 
 show_help() {
-    echo "ZiroClaw CLI Wrapper"
+    echo "OctoFlow CLI Wrapper"
     echo ""
-    echo "Usage: ziroclaw {command}"
+    echo "Usage: octoflow {command}"
     echo ""
     echo "Commands:"
-    echo "  start       Start the ZiroClaw service"
-    echo "  stop        Stop the ZiroClaw service"
-    echo "  restart     Restart the ZiroClaw service"
+    echo "  start       Start the OctoFlow service"
+    echo "  stop        Stop the OctoFlow service"
+    echo "  restart     Restart the OctoFlow service"
     echo "  status      Show service status and health"
     echo "  logs        View service logs (follow mode)"
     echo "  setup       Re-run the setup wizard"
     echo "  update      Pull latest changes and restart"
-    echo "  shell       Drop to ziroclaw user shell for debugging"
+    echo "  shell       Drop to octoflow user shell for debugging"
     echo "  help        Show this help message"
 }
 
@@ -209,15 +209,15 @@ check_health() {
 case "$1" in
     start)
         systemctl start $SERVICE_NAME
-        echo "ZiroClaw started"
+        echo "OctoFlow started"
         ;;
     stop)
         systemctl stop $SERVICE_NAME
-        echo "ZiroClaw stopped"
+        echo "OctoFlow stopped"
         ;;
     restart)
         systemctl restart $SERVICE_NAME
-        echo "ZiroClaw restarted"
+        echo "OctoFlow restarted"
         ;;
     status)
         systemctl status $SERVICE_NAME --no-pager
@@ -230,7 +230,7 @@ case "$1" in
         sudo -u $SERVICE_USER bash -c "cd $WORK_DIR && bun run setup"
         ;;
     update)
-        log_info "Updating ZiroClaw..."
+        log_info "Updating OctoFlow..."
         cd $WORK_DIR
         sudo -u $SERVICE_USER git pull
         sudo -u $SERVICE_USER bun install
@@ -257,7 +257,7 @@ WRAPPER_EOF
 
 # Main installation
 main() {
-    log_info "Starting ZiroClaw installation for Raspberry Pi..."
+    log_info "Starting OctoFlow installation for Raspberry Pi..."
     
     # Check sudo
     check_sudo
@@ -311,9 +311,9 @@ main() {
     log_info "Installation complete!"
     echo ""
     echo "Quick start:"
-    echo "  ziroclaw status    - Check service status"
-    echo "  ziroclaw logs      - View logs"
-    echo "  ziroclaw --help    - Show all commands"
+    echo "  octoflow status    - Check service status"
+    echo "  octoflow logs      - View logs"
+    echo "  octoflow --help    - Show all commands"
     echo ""
 }
 

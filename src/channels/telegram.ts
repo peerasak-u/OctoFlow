@@ -96,7 +96,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
       return
     }
-    await ctx.reply("ZiroClaw is online. Try /remember <note>.")
+    await ctx.reply("Octo is online. Try /remember <note>.")
   })
 
   bot.command("pair", async (ctx) => {

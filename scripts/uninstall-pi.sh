@@ -8,8 +8,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="/opt/ziroclaw"
-SERVICE_USER="ziroclaw"
+INSTALL_DIR="/opt/octoflow"
+SERVICE_USER="octoflow"
 
 # Helper functions
 log_info() {
@@ -34,24 +34,24 @@ check_sudo() {
 
 # Stop and disable service
 stop_service() {
-    log_info "Stopping ZiroClaw service..."
-    systemctl stop ziroclaw 2>/dev/null || log_warn "Service was not running"
+    log_info "Stopping OctoFlow service..."
+    systemctl stop octoflow 2>/dev/null || log_warn "Service was not running"
     
-    log_info "Disabling ZiroClaw service..."
-    systemctl disable ziroclaw 2>/dev/null || log_warn "Service was not enabled"
+    log_info "Disabling OctoFlow service..."
+    systemctl disable octoflow 2>/dev/null || log_warn "Service was not enabled"
     
-    if [ -f "/etc/systemd/system/ziroclaw.service" ]; then
+    if [ -f "/etc/systemd/system/octoflow.service" ]; then
         log_info "Removing service file..."
-        rm -f "/etc/systemd/system/ziroclaw.service"
+        rm -f "/etc/systemd/system/octoflow.service"
         systemctl daemon-reload
     fi
 }
 
 # Remove CLI wrapper
 remove_cli_wrapper() {
-    if [ -f "/usr/local/bin/ziroclaw" ]; then
+    if [ -f "/usr/local/bin/octoflow" ]; then
         log_info "Removing CLI wrapper..."
-        rm -f "/usr/local/bin/ziroclaw"
+        rm -f "/usr/local/bin/octoflow"
     fi
 }
 
@@ -87,7 +87,7 @@ remove_user() {
 
 # Main uninstallation
 main() {
-    log_info "Starting ZiroClaw uninstallation..."
+    log_info "Starting OctoFlow uninstallation..."
     
     check_sudo
     

@@ -8,8 +8,8 @@ type EnvMap = Record<string, string>
 // @ts-ignore - Bun-specific import.meta.dir
 const REPO_ROOT = resolvePath(import.meta.dir, "..", "..")
 const ENV_FILE = resolvePath(REPO_ROOT, ".env")
-const SERVICE_TEMPLATE_FILE = resolvePath(REPO_ROOT, "scripts", "templates", "ziroclaw.service.template")
-const SERVICE_FILE = "/etc/systemd/system/ziroclaw.service"
+const SERVICE_TEMPLATE_FILE = resolvePath(REPO_ROOT, "scripts", "templates", "octoflow.service.template")
+const SERVICE_FILE = "/etc/systemd/system/octoflow.service"
 
 function ask(promptText: string): string {
   const value = prompt(promptText)
@@ -129,10 +129,10 @@ async function installService(): Promise<boolean> {
     const serviceContent = template
       .replace(/\{\{BUN_PATH\}\}/g, bunPath)
       .replace(/\{\{WORK_DIR\}\}/g, REPO_ROOT)
-      .replace(/\{\{USER\}\}/g, "ziroclaw")
+      .replace(/\{\{USER\}\}/g, "octoflow")
 
     // Write to temp file
-    const tempServiceFile = "/tmp/ziroclaw.service"
+    const tempServiceFile = "/tmp/octoflow.service"
     await writeText(tempServiceFile, serviceContent)
 
     // Copy to systemd directory using sudo
@@ -145,7 +145,7 @@ async function installService(): Promise<boolean> {
     
     // Enable service
     console.log("Enabling service...")
-    execSync("sudo systemctl enable ziroclaw")
+    execSync("sudo systemctl enable octoflow")
 
     console.log("Service installed successfully!")
     return true
@@ -187,23 +187,23 @@ async function startService(): Promise<void> {
   console.log("")
   const startNow = ask("Start the service now? [Y/n]: ")
   if (!startNow.toLowerCase().startsWith("y") && startNow !== "") {
-    console.log("You can start the service later with: ziroclaw start")
+    console.log("You can start the service later with: octoflow start")
     return
   }
 
   try {
-    console.log("Starting ZiroClaw service...")
-    execSync("sudo systemctl start ziroclaw")
+    console.log("Starting OctoFlow service...")
+    execSync("sudo systemctl start octoflow")
     console.log("Service started!")
     
     // Wait a moment and check status
     await Bun.sleep(2000)
     console.log("")
     console.log("Service status:")
-    execSync("systemctl status ziroclaw --no-pager || true", { stdio: "inherit" })
+    execSync("systemctl status octoflow --no-pager || true", { stdio: "inherit" })
   } catch (error) {
     console.error("Failed to start service:", error)
-    console.log("You can check the logs with: ziroclaw logs")
+    console.log("You can check the logs with: octoflow logs")
   }
 }
 
@@ -254,10 +254,10 @@ async function main(): Promise<void> {
     console.log("Setup complete!")
     console.log("")
     console.log("Quick commands:")
-    console.log("  ziroclaw status    - Check service status")
-    console.log("  ziroclaw logs      - View logs")
-    console.log("  ziroclaw stop      - Stop service")
-    console.log("  ziroclaw restart   - Restart service")
+    console.log("  octoflow status    - Check service status")
+    console.log("  octoflow logs      - View logs")
+    console.log("  octoflow stop      - Stop service")
+    console.log("  octoflow restart   - Restart service")
     console.log("============================================")
   } else {
     console.log("")
