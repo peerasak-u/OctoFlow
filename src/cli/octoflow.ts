@@ -277,7 +277,41 @@ async function installMacOSLaunchAgent() {
 }
 
 async function installLinuxService() {
+  // Check if systemd is available
+  try {
+    execSync("which systemctl", { stdio: "ignore" })
+  } catch {
+    console.error("❌ systemd not found. This Linux distribution doesn't use systemd.")
+    console.log("")
+    console.log("You can still run OctoFlow manually:")
+    console.log("  octoflow start    # Run in foreground")
+    console.log("  octoflow dev      # Run with auto-reload")
+    process.exit(1)
+  }
+  
   const servicePath = "/etc/systemd/system/octoflow.service"
+  
+  // Detect opencode location for Linux
+  let opencodeDir = ""
+  const commonPaths = [
+    `${process.env.HOME}/.local/bin/opencode`,
+    "/usr/local/bin/opencode",
+    "/usr/bin/opencode",
+    `${process.env.HOME}/.cargo/bin/opencode`,
+  ]
+  
+  for (const p of commonPaths) {
+    try {
+      await Bun.file(p).text()
+      opencodeDir = p.replace(/\/opencode$/, "")
+      break
+    } catch {}
+  }
+  
+  // Build PATH with opencode if found
+  const pathEnv = opencodeDir 
+    ? `${process.env.HOME}/.bun/bin:${opencodeDir}:/usr/local/bin:/usr/bin:/bin`
+    : `${process.env.HOME}/.bun/bin:/usr/local/bin:/usr/bin:/bin`
   
   const serviceContent = `[Unit]
 Description=OctoFlow AI Assistant
@@ -290,6 +324,7 @@ WorkingDirectory=${REPO_ROOT}
 ExecStart=${process.env.HOME}/.bun/bin/bun ${REPO_ROOT}/src/index.ts
 Environment="HOME=${process.env.HOME}"
 Environment="OPENCODE_CONFIG_DIR=${REPO_ROOT}"
+Environment="PATH=${pathEnv}"
 EnvironmentFile=-${REPO_ROOT}/.env
 Restart=on-failure
 RestartSec=10
@@ -308,13 +343,25 @@ WantedBy=multi-user.target`
     
     console.log("✓ systemd service installed")
     console.log("")
-    console.log("Service commands:")
-    console.log("  sudo systemctl start octoflow   - Start")
-    console.log("  sudo systemctl stop octoflow    - Stop")
-    console.log("  sudo systemctl status octoflow  - Status")
-    console.log("  sudo journalctl -u octoflow -f  - View logs")
+    console.log("📝 Service commands:")
+    console.log("   octoflow service start    - Start service")
+    console.log("   octoflow service stop     - Stop service")
+    console.log("   octoflow service restart  - Restart service")
+    console.log("   octoflow service status   - Check status")
+    console.log("")
+    console.log("📝 View logs:")
+    console.log("   octoflow logs")
+    console.log("")
+    console.log("Or use systemctl directly:")
+    console.log("   sudo systemctl status octoflow")
+    console.log("   sudo journalctl -u octoflow -f")
   } catch (error) {
     console.error("❌ Failed to install systemd service:", error)
+    if (error instanceof Error && error.message.includes("sudo")) {
+      console.log("")
+      console.log("💡 Tip: Make sure you have sudo privileges:")
+      console.log("   sudo whoami")
+    }
     process.exit(1)
   }
 }
@@ -362,7 +409,15 @@ async function serviceStart() {
       execSync("sudo systemctl start octoflow", { stdio: "inherit" })
       console.log("✓ OctoFlow service started")
     } catch (error) {
-      console.error("❌ Failed to start service:", error)
+      console.error("❌ Failed to start service")
+      console.log("")
+      console.log("💡 Troubleshooting:")
+      console.log("   1. Make sure you've run: octoflow install-service")
+      console.log("   2. Check if you have sudo access: sudo whoami")
+      console.log("   3. Check service status: octoflow service status")
+      console.log("")
+      console.log("Or run in foreground mode instead:")
+      console.log("   octoflow start")
     }
   } else {
     console.error(`❌ Unsupported platform: ${platform}`)
@@ -404,21 +459,54 @@ async function serviceStatus() {
     try {
       const result = execSync(`launchctl list | grep ${SERVICE_LABEL} || echo "not found"`, { encoding: "utf-8" })
       if (result.includes(SERVICE_LABEL)) {
-        console.log("✓ OctoFlow service is installed")
-        console.log("   Check Activity Monitor or run: launchctl list | grep octoflow")
+        const parts = result.trim().split(/\s+/)
+        if (parts.length >= 2 && parts[0] !== "-") {
+          console.log("✓ OctoFlow service is running (PID: " + parts[0] + ")")
+        } else {
+          console.log("✓ OctoFlow service is installed but not running")
+          console.log("   Run: octoflow service start")
+        }
       } else {
-        console.log("✗ OctoFlow service is not running")
-        console.log("   Run: octoflow service start")
+        console.log("✗ OctoFlow service is not installed")
+        console.log("   Run: octoflow install-service")
       }
     } catch {
       console.log("✗ OctoFlow service is not installed")
       console.log("   Run: octoflow install-service")
     }
   } else if (platform === "linux") {
+    // Check if systemd is available
     try {
-      execSync("systemctl status octoflow --no-pager", { stdio: "inherit" })
+      execSync("which systemctl", { stdio: "ignore" })
     } catch {
-      console.log("✗ Service not running or not installed")
+      console.log("✗ systemd not available on this system")
+      console.log("")
+      console.log("You can still run OctoFlow manually:")
+      console.log("   octoflow start    # Run in foreground")
+      console.log("   octoflow dev      # Run with auto-reload")
+      return
+    }
+    
+    try {
+      const result = execSync("systemctl is-active octoflow", { encoding: "utf-8" })
+      if (result.trim() === "active") {
+        console.log("✓ OctoFlow service is running")
+        console.log("")
+        console.log("View details:")
+        console.log("   systemctl status octoflow")
+        console.log("   sudo journalctl -u octoflow -f")
+      } else {
+        console.log("✗ OctoFlow service is not running")
+        console.log("   Run: octoflow service start")
+      }
+    } catch {
+      console.log("✗ OctoFlow service is not installed or not running")
+      console.log("")
+      console.log("To install:")
+      console.log("   octoflow install-service")
+      console.log("")
+      console.log("Or run in foreground:")
+      console.log("   octoflow start")
     }
   } else {
     console.error(`❌ Unsupported platform: ${platform}`)
