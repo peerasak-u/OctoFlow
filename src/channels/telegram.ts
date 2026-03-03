@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard } from "grammy"
 import type { Logger } from "pino"
-import { AssistantCore, type ProgressUpdate } from "../core/assistant"
+import { AssistantCore, type ProgressUpdate, getToolIcon, getSkillIcon } from "../core/assistant"
 import { WhitelistStore } from "../core/whitelist-store"
 import { splitTextChunks } from "../utils/format-message"
 import { ackOutbox, listOutbox } from "../utils/outbox"
@@ -25,8 +25,8 @@ function whitelistInstruction(userID: string, filePath: string): string {
   ].join("\n")
 }
 
-const THIRTY_MINUTES_MS = 30 * 60 * 1000
-
+// Configuration constants
+const STATUS_MESSAGE_MAX_AGE_MS = parseInt(process.env.STATUS_MESSAGE_MAX_AGE_MS ?? "1800000", 10) // 30 minutes default
 const SHOW_TOOL_TIMELINE = process.env.SHOW_TOOL_TIMELINE === "true"
 
 type TimelineAction =
@@ -36,9 +36,9 @@ type TimelineAction =
 function formatTimeline(actions: TimelineAction[]): string {
   if (actions.length === 0) return ""
 
-  const lines = actions.map((action, index) => {
+  const lines = actions.map((action) => {
     const bullet = "•"
-    const icon = action.type === "tool" ? "🔧" : "📚"
+    const icon = action.type === "tool" ? getToolIcon(action.name) : getSkillIcon(action.name)
     const label = action.type === "tool" ? "tool" : "skill"
     const detailText = action.details ? `\n  └ ${action.details}` : ""
     return `${bullet} ${icon} ${label} \`${action.name}\`${detailText}`
@@ -54,9 +54,9 @@ function formatStatusMessage(update: ProgressUpdate): string {
     case "thinking":
       return "🤔 Thinking..."
     case "tool":
-      return `🔧 Running tool: ${update.name}...`
+      return `${getToolIcon(update.name)} Running tool: ${update.name}...`
     case "skill":
-      return `📚 Loading skill: ${update.name}...`
+      return `${getSkillIcon(update.name)} Loading skill: ${update.name}...`
     case "generating":
       return "📝 Preparing your answer..."
     default:
@@ -191,7 +191,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       }
 
       // Check if message is too old (> 30 minutes)
-      if (Date.now() - statusMessageCreatedAt > THIRTY_MINUTES_MS) {
+      if (Date.now() - statusMessageCreatedAt > STATUS_MESSAGE_MAX_AGE_MS) {
         updatingStatus = false
         return
       }
@@ -343,7 +343,8 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   })
 
   // Handle cancel button callbacks
-  bot.callbackQuery(/cancel:(.+)/, async (ctx) => {
+  // Only accept numeric userIDs for security
+  bot.callbackQuery(/cancel:(\d+)/, async (ctx) => {
     const callbackUserID = ctx.match[1]
     const clickingUserID = String(ctx.from?.id)
 

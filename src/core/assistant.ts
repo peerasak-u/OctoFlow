@@ -38,6 +38,38 @@ type OpencodeRuntime = {
   close?: () => Promise<void> | void
 }
 
+// Constants for event processing
+const MAX_TOOL_DETAIL_LENGTH = 80
+const DEFAULT_TOOL_DETAIL_TRUNCATION = 60
+
+// Tool icons for progress updates (can be customized via env or config)
+export const TOOL_ICONS: Record<string, string> = {
+  bash: process.env.TOOL_ICON_BASH ?? "🔧",
+  webfetch: process.env.TOOL_ICON_WEBFETCH ?? "🌐",
+  read: process.env.TOOL_ICON_READ ?? "📖",
+  write: process.env.TOOL_ICON_WRITE ?? "✏️",
+  edit: process.env.TOOL_ICON_EDIT ?? "✏️",
+  grep: process.env.TOOL_ICON_GREP ?? "🔍",
+  glob: process.env.TOOL_ICON_GLOB ?? "📁",
+  install_skill: process.env.TOOL_ICON_SKILL ?? "📚",
+  save_memory: process.env.TOOL_ICON_MEMORY ?? "💾",
+  default: process.env.TOOL_ICON_DEFAULT ?? "🔧",
+}
+
+export const SKILL_ICONS: Record<string, string> = {
+  default: process.env.SKILL_ICON_DEFAULT ?? "📚",
+}
+
+// Get icon for a tool name
+export function getToolIcon(toolName: string): string {
+  return TOOL_ICONS[toolName] ?? TOOL_ICONS.default
+}
+
+// Get icon for a skill name
+export function getSkillIcon(skillName: string): string {
+  return SKILL_ICONS[skillName] ?? SKILL_ICONS.default
+}
+
 function unwrap<T>(value: unknown): T {
   if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
     return (value as { data: T }).data
@@ -266,86 +298,6 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
   }
 }
 
-function formatToolDetails(toolName: string, input: unknown): string | undefined {
-  try {
-    const inputData = input as Record<string, unknown>
-    
-    // Tool-specific formatting
-    switch (toolName) {
-      case "bash": {
-        const command = inputData.command || inputData.cmd || inputData.input
-        if (typeof command === "string") {
-          return command.length > 100 ? command.slice(0, 100) + "..." : command
-        }
-        break
-      }
-      case "webfetch": {
-        const url = inputData.url || inputData.input
-        if (typeof url === "string") {
-          return url.length > 100 ? url.slice(0, 100) + "..." : url
-        }
-        break
-      }
-      case "read": {
-        const path = inputData.path || inputData.filePath || inputData.file
-        if (typeof path === "string") {
-          return path.length > 100 ? path.slice(0, 100) + "..." : path
-        }
-        break
-      }
-      case "write": {
-        const path = inputData.path || inputData.filePath || inputData.file
-        if (typeof path === "string") {
-          return path.length > 100 ? path.slice(0, 100) + "..." : path
-        }
-        break
-      }
-      case "grep": {
-        const pattern = inputData.pattern || inputData.search
-        const path = inputData.path || inputData.filePath
-        if (typeof pattern === "string") {
-          const detail = path ? `${pattern} in ${path}` : pattern
-          return detail.length > 100 ? detail.slice(0, 100) + "..." : detail
-        }
-        break
-      }
-      case "edit": {
-        const path = inputData.path || inputData.filePath
-        if (typeof path === "string") {
-          return path.length > 100 ? path.slice(0, 100) + "..." : path
-        }
-        break
-      }
-      default: {
-        // For other tools, try to extract meaningful info
-        const url = inputData.url || inputData.link || inputData.href
-        if (typeof url === "string") {
-          return url.length > 100 ? url.slice(0, 100) + "..." : url
-        }
-        
-        const path = inputData.path || inputData.filePath || inputData.file || inputData.dir
-        if (typeof path === "string") {
-          return path.length > 100 ? path.slice(0, 100) + "..." : path
-        }
-        
-        const query = inputData.query || inputData.search || inputData.q
-        if (typeof query === "string") {
-          return query.length > 100 ? query.slice(0, 100) + "..." : query
-        }
-        
-        const text = inputData.text || inputData.message || inputData.content
-        if (typeof text === "string") {
-          return text.length > 80 ? text.slice(0, 80) + "..." : text
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return undefined
-}
-
-
 function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number): string {
   return [
     "You are ZiroClaw, an autonomous assistant agent running on top of OpenCode.",
@@ -462,6 +414,82 @@ export class AssistantCore {
     return this.activeRequests.has(userID)
   }
 
+  /**
+   * Process SDK events for tool/skill detection with proper cancellation
+   */
+  private async trackToolEvents(
+    reader: AsyncIterator<unknown>,
+    sessionID: string,
+    onProgress: ProgressCallback,
+    abortSignal: AbortSignal,
+    reportedTools: Map<string, { name: string; details?: string }>
+  ): Promise<void> {
+
+    try {
+      while (!abortSignal.aborted) {
+        const { done, value } = await reader.next()
+        if (done) break
+
+        const event = value as { type?: string; properties?: { part?: unknown } }
+
+        // Only process events for our session
+        const part = event?.properties?.part as {
+          id?: string
+          callID?: string
+          type?: string
+          sessionID?: string
+          tool?: string
+          state?: {
+            status?: string
+            input?: Record<string, unknown>
+          }
+        }
+
+        if (!part || part.sessionID !== sessionID) continue
+        if (part.type !== "tool") continue
+
+        const callID = part.callID || part.id || "unknown"
+        const toolName = part.tool || "unknown"
+        const toolState = part.state?.status
+        const toolInput = part.state?.input
+
+        // Check if we've already reported this tool call
+        const alreadyReported = reportedTools.has(callID)
+
+        // Extract tool input details from the state
+        const details = toolInput ? formatToolInput(toolName, toolInput) : undefined
+
+        // Update our tracking
+        if (!alreadyReported) {
+          // First time seeing this tool call - report it
+          reportedTools.set(callID, { name: toolName, details })
+
+          this.logger.info(
+            {
+              toolName,
+              toolState,
+              isSkill: isSkillTool(toolName),
+              hasDetails: !!details,
+            },
+            "tool started"
+          )
+
+          // Report tool with details if available
+          if (isSkillTool(toolName)) {
+            onProgress({ type: "skill", name: toolName, details })
+          } else {
+            onProgress({ type: "tool", name: toolName, details })
+          }
+        } else if (details && !reportedTools.get(callID)?.details) {
+          // We've seen this tool before but now we have details - update tracking
+          reportedTools.set(callID, { name: toolName, details })
+        }
+      }
+    } catch (error) {
+      this.logger.debug({ error, sessionID }, "event processing error")
+    }
+  }
+
   async init(): Promise<void> {
     await this.setupRuntime()
     await this.memory.init()
@@ -522,80 +550,16 @@ export class AssistantCore {
           
           if (eventStream?.stream) {
             const reader = eventStream.stream[Symbol.asyncIterator]()
-            
-            // Start processing events in background
-            const processEvents = async () => {
-              try {
-                while (true) {
-                  const { done, value } = await reader.next()
-                  if (done) break
-                  
-                  const event = value as { type?: string; properties?: { part?: unknown } }
-                  
-                  // Only process events for our session
-                  const part = event?.properties?.part as { 
-                    id?: string;
-                    callID?: string;
-                    type?: string; 
-                    sessionID?: string;
-                    tool?: string;
-                    state?: { 
-                      status?: string;
-                      input?: Record<string, unknown>;
-                    };
-                  } | undefined
-                  
-                  if (!part || part.sessionID !== sessionID) continue
-                  if (part.type !== "tool") continue
-                  
-                  const callID = part.callID || part.id || "unknown"
-                  const toolName = part.tool || "unknown"
-                  const toolState = part.state?.status
-                  const toolInput = part.state?.input
-                  
+            const abortController = new AbortController()
 
-                  
-                  // Check if we've already reported this tool call
-                  const alreadyReported = reportedTools.has(callID)
-                  
-                  // Extract tool input details from the state
-                  const details = toolInput ? formatToolInput(toolName, toolInput) : undefined
-                  
-                  // Update our tracking
-                  if (!alreadyReported) {
-                    // First time seeing this tool call - report it
-                    reportedTools.set(callID, { name: toolName, details })
-                    
-                    this.logger.info({ 
-                      toolName, 
-                      toolState, 
-                      isSkill: isSkillTool(toolName), 
-                      hasDetails: !!details
-                    }, "tool started")
-                    
-                    // Report tool with details if available
-                    if (isSkillTool(toolName)) {
-                      onProgress({ type: "skill", name: toolName, details })
-                    } else {
-                      onProgress({ type: "tool", name: toolName, details })
-                    }
-                  } else if (details && !reportedTools.get(callID)?.details) {
-                    // We've seen this tool before but now we have details - update tracking
-                    reportedTools.set(callID, { name: toolName, details })
-                  }
-                }
-              } catch (error) {
-                this.logger.debug({ error, sessionID }, "event processing error")
-              }
-            }
-            
-            // Store cleanup function
+            // Store cleanup function to abort event processing
             eventUnsubscribe = () => {
+              abortController.abort()
               reader.return?.(undefined).catch(() => {})
             }
-            
-            // Start processing in background (don't await)
-            void processEvents()
+
+            // Start processing events in background using extracted method
+            void this.trackToolEvents(reader, sessionID, onProgress, abortController.signal, reportedTools)
           }
         } catch (error) {
           this.logger.debug({ error, sessionID }, "event subscription failed, continuing without progress tracking")
