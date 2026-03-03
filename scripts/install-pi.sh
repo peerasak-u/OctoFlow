@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-set -eu
+set -e
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
 INSTALL_DIR="/opt/octoflow"
 SERVICE_USER="octoflow"
 REPO_URL="https://github.com/peerasak-u/OctoFlow.git"
+
+# Track if we have any errors
+HAS_ERRORS=0
 
 # Helper functions
 log_info() {
@@ -23,104 +27,141 @@ log_warn() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+    HAS_ERRORS=1
 }
 
-# Check if running as root or with sudo
-check_sudo() {
-    if [ "$EUID" -ne 0 ]; then
-        log_error "This script must be run with sudo or as root"
-        log_info "Please run: curl -fsSL <url> | sudo bash"
-        exit 1
-    fi
+log_step() {
+    echo -e "${BLUE}[CHECK]${NC} $1"
 }
 
-# Detect existing Bun installation
-detect_bun() {
-    local bun_path=""
-    
-    # Check if bun is in PATH
-    if command -v bun &> /dev/null; then
-        bun_path=$(which bun)
-        log_info "Found Bun in PATH: $bun_path"
-        echo "$bun_path"
+# Check if command exists
+check_command() {
+    if command -v "$1" &> /dev/null; then
         return 0
-    fi
-    
-    # Check common locations
-    if [ -x "$HOME/.bun/bin/bun" ]; then
-        bun_path="$HOME/.bun/bin/bun"
-        log_info "Found Bun at: $bun_path"
-        echo "$bun_path"
-        return 0
-    fi
-    
-    if [ -x "/usr/local/bin/bun" ]; then
-        bun_path="/usr/local/bin/bun"
-        log_info "Found Bun at: $bun_path"
-        echo "$bun_path"
-        return 0
-    fi
-    
-    if [ -x "/opt/homebrew/bin/bun" ]; then
-        bun_path="/opt/homebrew/bin/bun"
-        log_info "Found Bun at: $bun_path"
-        echo "$bun_path"
-        return 0
-    fi
-    
-    # Check BUN_INSTALL env var
-    if [ -n "${BUN_INSTALL:-}" ] && [ -x "$BUN_INSTALL/bin/bun" ]; then
-        bun_path="$BUN_INSTALL/bin/bun"
-        log_info "Found Bun via BUN_INSTALL: $bun_path"
-        echo "$bun_path"
-        return 0
-    fi
-    
-    return 1
-}
-
-# Install Bun system-wide
-install_bun_systemwide() {
-    log_info "Installing Bun system-wide..."
-    
-    # Use official Bun installer
-    curl -fsSL https://bun.sh/install | bash
-    
-    # Add to PATH for this session
-    export PATH="$HOME/.bun/bin:$PATH"
-    
-    # Create symlink for system-wide access
-    if [ -f "$HOME/.bun/bin/bun" ]; then
-        ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-        chmod +x /usr/local/bin/bun
-        log_info "Bun installed to /usr/local/bin/bun"
-        echo "/usr/local/bin/bun"
     else
-        log_error "Bun installation failed - binary not found at $HOME/.bun/bin/bun"
-        exit 1
+        return 1
     fi
 }
 
-# Install system dependencies
-install_dependencies() {
-    log_info "Installing system dependencies..."
-    apt-get update
-    apt-get install -y git curl unzip
-    log_info "Dependencies installed"
+# Check prerequisites
+check_prerequisites() {
+    echo ""
+    echo "=========================================="
+    echo "  OctoFlow Installation Doctor"
+    echo "=========================================="
+    echo ""
+    
+    log_step "Checking sudo access..."
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run with sudo"
+        echo ""
+        echo "Please run:"
+        echo "  sudo ./scripts/install-pi.sh"
+        echo ""
+        exit 1
+    fi
+    log_info "Running as root ✓"
+    
+    echo ""
+    log_step "Checking system dependencies..."
+    
+    # Check git
+    if check_command git; then
+        log_info "git is installed ($(git --version | head -1)) ✓"
+    else
+        log_error "git is not installed"
+        echo ""
+        echo "Install with:"
+        echo "  sudo apt-get update && sudo apt-get install -y git"
+        echo ""
+    fi
+    
+    # Check curl
+    if check_command curl; then
+        log_info "curl is installed ✓"
+    else
+        log_error "curl is not installed"
+        echo ""
+        echo "Install with:"
+        echo "  sudo apt-get update && sudo apt-get install -y curl"
+        echo ""
+    fi
+    
+    # Check unzip
+    if check_command unzip; then
+        log_info "unzip is installed ✓"
+    else
+        log_error "unzip is not installed"
+        echo ""
+        echo "Install with:"
+        echo "  sudo apt-get update && sudo apt-get install -y unzip"
+        echo ""
+    fi
+    
+    echo ""
+    log_step "Checking Bun installation..."
+    
+    BUN_PATH=""
+    if check_command bun; then
+        BUN_PATH=$(which bun)
+        log_info "Bun found in PATH: $BUN_PATH ($(bun --version)) ✓"
+    elif [ -x "$HOME/.bun/bin/bun" ]; then
+        BUN_PATH="$HOME/.bun/bin/bun"
+        log_info "Bun found at: $BUN_PATH ✓"
+        echo ""
+        echo "Add to your PATH:"
+        echo "  export PATH=\"$HOME/.bun/bin:\$PATH\""
+        echo ""
+        echo "Or create a symlink:"
+        echo "  sudo ln -sf $HOME/.bun/bin/bun /usr/local/bin/bun"
+        echo ""
+    elif [ -x "/usr/local/bin/bun" ]; then
+        BUN_PATH="/usr/local/bin/bun"
+        log_info "Bun found at: $BUN_PATH ✓"
+    else
+        log_error "Bun is not installed"
+        echo ""
+        echo "Install Bun with:"
+        echo "  curl -fsSL https://bun.sh/install | bash"
+        echo ""
+        echo "Then either:"
+        echo "  1. Add to PATH: export PATH=\"\$HOME/.bun/bin:\$PATH\""
+        echo "  2. Create symlink: sudo ln -sf \$HOME/.bun/bin/bun /usr/local/bin/bun"
+        echo ""
+    fi
+    
+    if [ $HAS_ERRORS -ne 0 ]; then
+        echo ""
+        echo "=========================================="
+        log_error "Some prerequisites are missing!"
+        echo "=========================================="
+        echo ""
+        echo "Please install the missing dependencies and run this script again."
+        echo ""
+        exit 1
+    fi
+    
+    echo ""
+    echo "=========================================="
+    log_info "All prerequisites are met! ✓"
+    echo "=========================================="
+    echo ""
 }
 
 # Create service user
 create_service_user() {
+    log_step "Creating service user..."
     if id "$SERVICE_USER" &>/dev/null; then
         log_warn "User '$SERVICE_USER' already exists"
     else
-        log_info "Creating service user: $SERVICE_USER"
         useradd --system --home "$INSTALL_DIR" --shell /bin/bash "$SERVICE_USER"
+        log_info "Created user: $SERVICE_USER ✓"
     fi
 }
 
 # Clone repository
 clone_repository() {
+    log_step "Cloning repository..."
     if [ -d "$INSTALL_DIR" ]; then
         log_warn "Directory $INSTALL_DIR already exists"
         read -p "Remove and re-clone? [y/N]: " response
@@ -132,19 +173,20 @@ clone_repository() {
         fi
     fi
     
-    log_info "Cloning repository to $INSTALL_DIR..."
     git clone "$REPO_URL" "$INSTALL_DIR"
+    log_info "Cloned to $INSTALL_DIR ✓"
 }
 
 # Set ownership
 set_ownership() {
-    log_info "Setting ownership to $SERVICE_USER:$SERVICE_USER..."
+    log_step "Setting ownership..."
     chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+    log_info "Ownership set to $SERVICE_USER:$SERVICE_USER ✓"
 }
 
 # Generate CLI wrapper
 generate_cli_wrapper() {
-    log_info "Generating octoflow CLI wrapper..."
+    log_step "Installing octoflow CLI..."
     
     local wrapper_path="/usr/local/bin/octoflow"
     
@@ -211,12 +253,12 @@ case "$1" in
         sudo -u $SERVICE_USER bash -c "cd $WORK_DIR && bun run setup"
         ;;
     update)
-        log_info "Updating OctoFlow..."
+        echo "Updating OctoFlow..."
         cd $WORK_DIR
         sudo -u $SERVICE_USER git pull
         sudo -u $SERVICE_USER bun install
         systemctl restart $SERVICE_NAME
-        log_info "Update complete"
+        echo "Update complete"
         ;;
     shell)
         sudo -u $SERVICE_USER bash -c "cd $WORK_DIR && exec bash"
@@ -233,53 +275,23 @@ esac
 WRAPPER_EOF
 
     chmod +x "$wrapper_path"
-    log_info "CLI wrapper installed to $wrapper_path"
+    log_info "CLI installed to $wrapper_path ✓"
 }
 
-# Main installation
-main() {
-    log_info "Starting OctoFlow installation for Raspberry Pi..."
-    
-    # Check sudo
-    check_sudo
-    
-    # Install dependencies
-    install_dependencies
-    
-    # Detect or install Bun
-    BUN_PATH=$(detect_bun || true)
-    if [ -z "$BUN_PATH" ]; then
-        log_info "Bun not found. Installing..."
-        BUN_PATH=$(install_bun_systemwide)
-    fi
-    
-    # Verify Bun works
-    if ! "$BUN_PATH" --version &>/dev/null; then
-        log_error "Bun installation failed or is not working"
-        exit 1
-    fi
-    
-    log_info "Using Bun: $BUN_PATH"
-    
-    # Create service user
-    create_service_user
-    
-    # Clone repository
-    clone_repository
-    
-    # Set ownership
-    set_ownership
-    
-    # Generate CLI wrapper
-    generate_cli_wrapper
-    
-    # Install dependencies and run setup
-    log_info "Installing dependencies and running setup..."
-    log_info "You will be prompted for configuration..."
+# Install dependencies and run setup
+run_setup() {
+    log_step "Installing dependencies and running setup..."
     echo ""
     
-    # Export Bun path for the setup
-    export BUN_PATH
+    # Detect Bun path again (in case it was just installed)
+    if check_command bun; then
+        BUN_PATH=$(which bun)
+    elif [ -x "$HOME/.bun/bin/bun" ]; then
+        BUN_PATH="$HOME/.bun/bin/bun"
+    elif [ -x "/usr/local/bin/bun" ]; then
+        BUN_PATH="/usr/local/bin/bun"
+    fi
+    
     sudo -u "$SERVICE_USER" bash -c "
         export PATH=\"$(dirname $BUN_PATH):\$PATH\"
         export BUN_PATH=\"$BUN_PATH\"
@@ -287,11 +299,38 @@ main() {
         bun install
         bun run setup
     "
+}
+
+# Main installation
+main() {
+    # Check all prerequisites first
+    check_prerequisites
     
     echo ""
-    log_info "Installation complete!"
+    read -p "Continue with installation? [Y/n]: " response
+    if [[ "$response" =~ ^[Nn]$ ]]; then
+        echo "Installation cancelled."
+        exit 0
+    fi
+    
     echo ""
-    echo "Quick start:"
+    echo "=========================================="
+    echo "  Installing OctoFlow..."
+    echo "=========================================="
+    echo ""
+    
+    create_service_user
+    clone_repository
+    set_ownership
+    generate_cli_wrapper
+    run_setup
+    
+    echo ""
+    echo "=========================================="
+    log_info "Installation complete! ✓"
+    echo "=========================================="
+    echo ""
+    echo "Quick commands:"
     echo "  octoflow status    - Check service status"
     echo "  octoflow logs      - View logs"
     echo "  octoflow --help    - Show all commands"
