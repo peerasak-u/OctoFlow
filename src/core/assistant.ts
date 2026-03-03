@@ -12,6 +12,15 @@ type AssistantInput = {
   text: string
 }
 
+export type ProgressUpdate =
+  | { type: "start" }
+  | { type: "thinking" }
+  | { type: "tool"; name: string }
+  | { type: "skill"; name: string }
+  | { type: "generating" }
+
+export type ProgressCallback = (update: ProgressUpdate) => void
+
 type AssistantOptions = {
   model?: string
   serverUrl?: string
@@ -84,7 +93,14 @@ async function extractPromptText(result: unknown): Promise<string> {
 
 type SessionMessage = {
   info?: { id?: string; role?: string }
-  parts?: Array<{ type?: string; text?: string }>
+  parts?: Array<{
+    id?: string
+    type?: string
+    text?: string
+    tool?: string
+    input?: unknown
+    state?: { status?: string }
+  }>
 }
 
 function toMessages(value: unknown): SessionMessage[] {
@@ -136,6 +152,29 @@ function assistantSignature(message: SessionMessage | null): string {
 
 function safeString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function isSkillTool(toolName: string): boolean {
+  const name = toolName.toLowerCase()
+  // Tools containing "_skill" or starting with "skill_"
+  if (name.includes("_skill") || name.startsWith("skill_")) {
+    return true
+  }
+  // Known skill tools
+  const knownSkills = [
+    "install_skill",
+    "skill_creator",
+    "humanize",
+    "pr_creator",
+    "code_reviewer",
+    "bun_file_io",
+    "deep_research",
+    "docs_writer",
+    "gog",
+    "apple_notes",
+    "agent_browser",
+  ]
+  return knownSkills.includes(name)
 }
 
 
@@ -222,7 +261,7 @@ export class AssistantCore {
     await this.sessions.init()
   }
 
-  async ask(input: AssistantInput): Promise<string> {
+  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<string> {
     const startedAt = Date.now()
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
@@ -246,6 +285,8 @@ export class AssistantCore {
     )
 
     let beforeAssistantSig = ""
+    const seenTools = new Set<string>()
+    
     try {
       const beforeMessagesResult = await client.session.messages({
         path: { id: sessionID },
@@ -256,8 +297,76 @@ export class AssistantCore {
       this.logger.warn({ error, sessionID }, "assistant preload messages failed")
     }
 
+    onProgress?.({ type: "start" })
+
     let response: unknown
+    let eventUnsubscribe: (() => void) | undefined
+    
     try {
+      if (onProgress) {
+        onProgress({ type: "thinking" })
+        
+        // Subscribe to events for real-time tool/skill detection
+        try {
+          const eventStream = await client.event.subscribe()
+          
+          if (eventStream?.stream) {
+            const reader = eventStream.stream[Symbol.asyncIterator]()
+            
+            // Start processing events in background
+            const processEvents = async () => {
+              try {
+                while (true) {
+                  const { done, value } = await reader.next()
+                  if (done) break
+                  
+                  const event = value as { type?: string; properties?: { part?: unknown } }
+                  
+                  // Only process events for our session
+                  const part = event?.properties?.part as { 
+                    type?: string; 
+                    sessionID?: string;
+                    tool?: string;
+                    state?: { status?: string };
+                  } | undefined
+                  
+                  if (!part || part.sessionID !== sessionID) continue
+                  if (part.type !== "tool") continue
+                  
+                  const toolName = part.tool || "unknown"
+                  const toolState = part.state?.status
+                  
+                  // Only report tools that are running or pending (not completed)
+                  if ((toolState === "running" || toolState === "pending") && !seenTools.has(toolName)) {
+                    seenTools.add(toolName)
+                    
+                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
+                    
+                    if (isSkillTool(toolName)) {
+                      onProgress({ type: "skill", name: toolName })
+                    } else {
+                      onProgress({ type: "tool", name: toolName })
+                    }
+                  }
+                }
+              } catch (error) {
+                this.logger.debug({ error, sessionID }, "event processing error")
+              }
+            }
+            
+            // Store cleanup function
+            eventUnsubscribe = () => {
+              reader.return?.(undefined).catch(() => {})
+            }
+            
+            // Start processing in background (don't await)
+            void processEvents()
+          }
+        } catch (error) {
+          this.logger.debug({ error, sessionID }, "event subscription failed, continuing without progress tracking")
+        }
+      }
+
       response = await client.session.prompt({
         path: { id: sessionID },
         body: {
@@ -270,6 +379,9 @@ export class AssistantCore {
     } catch (error) {
       this.logger.error({ error, sessionID }, "assistant prompt call failed")
       throw error
+    } finally {
+      // Clean up event subscription
+      eventUnsubscribe?.()
     }
 
     const parsedText = await extractPromptText(response)
