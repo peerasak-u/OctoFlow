@@ -32,7 +32,7 @@ function formatStatusMessage(update: ProgressUpdate): string {
     case "start":
       return "⏳ Processing your request..."
     case "thinking":
-      return "🤔 Thinking about your question..."
+      return "🤔 Thinking..."
     case "tool":
       return `🔧 Running tool: ${update.name}...`
     case "skill":
