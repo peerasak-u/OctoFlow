@@ -56,7 +56,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       for (const item of pending) {
         const chunks = splitTextChunks(item.message.text, 3000)
         for (const chunk of chunks) {
-          await bot.api.sendMessage(item.message.userID, chunk)
+          await bot.api.sendMessage(item.message.userID, chunk, { parse_mode: "Markdown" })
         }
         await ackOutbox(item.filePath)
         opts.logger.info({ userID: item.message.userID, chunkCount: chunks.length }, "telegram proactive message sent")
@@ -264,7 +264,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
       const chunks = splitTextChunks(answer, 3000)
       for (const chunk of chunks) {
-        await ctx.reply(chunk)
+        await ctx.reply(chunk, { parse_mode: "Markdown" })
       }
       opts.logger.info(
         {
