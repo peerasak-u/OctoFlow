@@ -1,7 +1,5 @@
 # OctoFlow
 
-![OctoFlow Telegram](octoflow-telegram.png)
-
 OctoFlow is a minimal implementation of an AI assistant using the OpenCode SDK.
 
 - Telegram adapter (`grammy`)
