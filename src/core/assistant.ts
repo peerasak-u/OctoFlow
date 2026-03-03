@@ -443,22 +443,13 @@ export class AssistantCore {
                   if (done) break
                   
                   const event = value as { type?: string; properties?: { part?: unknown } }
-                  
-                  // Log the full event structure for debugging
-                  this.logger.debug({ 
-                    eventKeys: Object.keys(event),
-                    eventType: event.type,
-                    propertiesKeys: event.properties ? Object.keys(event.properties) : null,
-                    eventSample: JSON.stringify(event).slice(0, 500)
-                  }, "full event structure")
-                  
+
                   // Only process events for our session
                   const part = event?.properties?.part as { 
                     type?: string; 
                     sessionID?: string;
                     tool?: string;
                     state?: { status?: string };
-                    input?: unknown;
                   } | undefined
                   
                   if (!part || part.sessionID !== sessionID) continue
@@ -467,94 +458,17 @@ export class AssistantCore {
                   const toolName = part.tool || "unknown"
                   const toolState = part.state?.status
                   
-                  // Debug: log the entire part structure
-                  this.logger.debug({ 
-                    partKeys: Object.keys(part),
-                    hasInput: !!part.input,
-                    inputType: part.input ? typeof part.input : 'none',
-                    inputSample: part.input ? JSON.stringify(part.input).slice(0, 200) : null
-                  }, "event part structure")
-                  
                   // Only report tools that are running or pending (not completed)
                   if ((toolState === "running" || toolState === "pending") && !seenTools.has(toolName)) {
                     seenTools.add(toolName)
                     
-                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName), hasEventInput: !!part.input }, "tool event detected")
+                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
                     
-                    // Try to get details from event first, then from messages
-                    let toolDetails: string | undefined
-                    
-                    // Check if input is directly in the event
-                    if (part.input) {
-                      toolDetails = formatToolDetails(toolName, part.input)
-                      this.logger.info({ toolName, toolDetails, source: "event" }, "extracted tool details from event")
-                    }
-                    
-                    // Fetch tool details (input arguments) from session messages
-                    // Retry a few times since there's a race condition between event and message persistence
-                    let retryCount = 0
-                    const maxRetries = 5
-                    
-                    while (retryCount < maxRetries && !toolDetails) {
-                      try {
-                        const messagesResult = await client.session.messages({
-                          path: { id: sessionID },
-                        } as never)
-                        const messages = toMessages(messagesResult)
-                        
-                        // Debug: log message count and last few message types
-                        this.logger.debug({ 
-                          toolName, 
-                          retryCount, 
-                          messageCount: messages.length,
-                          lastMessageRole: messages[messages.length - 1]?.info?.role,
-                          lastMessagePartTypes: messages[messages.length - 1]?.parts?.map((p: { type?: string }) => p.type)
-                        }, "searching for tool details in messages")
-                        
-                        // Find the most recent tool call with this tool name
-                        for (let i = messages.length - 1; i >= 0; i--) {
-                          const msg = messages[i]
-                          const msgParts = msg.parts || []
-                          for (const msgPart of msgParts) {
-                            // Debug: log each tool part we find
-                            if (msgPart.type === "tool") {
-                              this.logger.debug({ 
-                                foundTool: msgPart.tool, 
-                                lookingFor: toolName,
-                                hasInput: !!msgPart.input,
-                                inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : []
-                              }, "found tool part in message")
-                            }
-                            
-                            if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
-                              toolDetails = formatToolDetails(toolName, msgPart.input)
-                              this.logger.info({ toolName, toolDetails, input: msgPart.input }, "found tool details")
-                              break
-                            }
-                          }
-                          if (toolDetails) break
-                        }
-                      } catch (fetchError) {
-                        this.logger.debug({ fetchError, toolName, retryCount }, "failed to fetch tool details")
-                      }
-                      
-                      if (!toolDetails) {
-                        retryCount++
-                        if (retryCount < maxRetries) {
-                          // Wait 100ms before retrying
-                          await new Promise(resolve => setTimeout(resolve, 100))
-                        }
-                      }
-                    }
-                    
-                    if (!toolDetails) {
-                      this.logger.warn({ toolName, retryCount }, "could not fetch tool details after retries")
-                    }
-                    
+                    // Report tool without details - details will be fetched at the end
                     if (isSkillTool(toolName)) {
-                      onProgress({ type: "skill", name: toolName, details: toolDetails })
+                      onProgress({ type: "skill", name: toolName })
                     } else {
-                      onProgress({ type: "tool", name: toolName, details: toolDetails })
+                      onProgress({ type: "tool", name: toolName })
                     }
                   }
                 }
@@ -632,6 +546,44 @@ export class AssistantCore {
       // Always clean up active request tracking
       this.activeRequests.delete(input.userID)
     }
+  }
+
+  async getSessionToolDetails(sessionID: string, toolNames: string[]): Promise<Map<string, string>> {
+    const client = this.ensureClient()
+    const details = new Map<string, string>()
+    
+    try {
+      const messagesResult = await client.session.messages({
+        path: { id: sessionID },
+      } as never)
+      const messages = toMessages(messagesResult)
+      
+      // Find tool calls for each tool name
+      for (const toolName of toolNames) {
+        if (details.has(toolName)) continue // Already found
+        
+        // Search from most recent to oldest
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i]
+          const msgParts = msg.parts || []
+          
+          for (const msgPart of msgParts) {
+            if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
+              const detail = formatToolDetails(toolName, msgPart.input)
+              if (detail) {
+                details.set(toolName, detail)
+                break
+              }
+            }
+          }
+          if (details.has(toolName)) break
+        }
+      }
+    } catch (error) {
+      this.logger.debug({ error, sessionID, toolNames }, "failed to fetch session tool details")
+    }
+    
+    return details
   }
 
   async startNewMainSession(reason = "manual"): Promise<string> {

@@ -289,12 +289,31 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Mark that answer is received - prevent further status updates
       answerReceived = true
 
+      // Get session ID for fetching tool details
+      const activeRequest = opts.assistant.getActiveRequest(userID)
+      const sessionID = activeRequest?.sessionID
+
       // Delete status message before sending final response
       await deleteStatusMessage()
 
       // Send tool timeline BEFORE the final response (for paranoid users who want to audit)
-      if (SHOW_TOOL_TIMELINE && timeline.length > 0) {
-        const timelineText = formatTimeline(timeline)
+      if (SHOW_TOOL_TIMELINE && timeline.length > 0 && sessionID) {
+        // Fetch tool details from session messages (now they're persisted)
+        const toolNames = timeline
+          .filter((a): a is { type: "tool"; name: string; details?: string } => a.type === "tool")
+          .map(a => a.name)
+        
+        const toolDetails = await opts.assistant.getSessionToolDetails(sessionID, [...new Set(toolNames)])
+        
+        // Build timeline with fetched details
+        const enrichedTimeline = timeline.map(action => {
+          if (action.type === "tool" && toolDetails.has(action.name)) {
+            return { ...action, details: toolDetails.get(action.name) }
+          }
+          return action
+        })
+        
+        const timelineText = formatTimeline(enrichedTimeline)
         if (timelineText) {
           await ctx.reply(timelineText, { parse_mode: "Markdown" })
         }
