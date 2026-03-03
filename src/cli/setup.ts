@@ -77,20 +77,55 @@ async function resolveModel(): Promise<string> {
   return ""
 }
 
-async function ensureOpencodeAuth(): Promise<void> {
+async function ensureOpencodeAuth(updates: EnvMap): Promise<void> {
   const model = await resolveModel()
-  if (model) return
+  if (model) {
+    console.log(`✓ Using model: ${model}`)
+    return
+  }
 
-  console.log("OpenCode model not found. Launching 'opencode' for setup...")
-  const proc = Bun.spawn(["opencode", "auth", "login"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" })
-  await proc.exited
-
+  console.log("")
+  console.log("OpenCode model not configured.")
+  console.log("")
+  console.log("You have two options:")
+  console.log("1. Set OPENCODE_MODEL in .env (e.g., 'anthropic/claude-3-5-sonnet-20241022')")
+  console.log("2. Use OpenCode CLI to pick a model interactively")
+  console.log("")
+  
+  const useEnv = ask("Set OPENCODE_MODEL now? [Y/n]: ")
+  
+  if (!useEnv.toLowerCase().startsWith("n")) {
+    console.log("")
+    console.log("Common models:")
+    console.log("  anthropic/claude-3-5-sonnet-20241022")
+    console.log("  openai/gpt-4o")
+    console.log("  google/gemini-1.5-pro")
+    console.log("")
+    const modelInput = ask("Enter model (provider/model format): ")
+    if (modelInput && modelInput.includes("/")) {
+      // Add to env updates
+      updates.OPENCODE_MODEL = modelInput
+      return
+    }
+  }
+  
+  console.log("")
+  console.log("Launching OpenCode CLI to pick a model...")
+  console.log("Instructions:")
+  console.log("  1. Type '/models' to see available models")
+  console.log("  2. Select a model by typing its number")
+  console.log("  3. Press Ctrl+C to exit when done")
+  console.log("")
+  
+  const tui = Bun.spawn(["opencode"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" })
+  await tui.exited
+  
+  // Check again after TUI
   const next = await resolveModel()
   if (!next) {
-    console.log("Model not found. Use '/models' inside the OpenCode TUI to pick a model.")
-    await Bun.sleep(3_000)
-    const tui = Bun.spawn(["opencode"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" })
-    await tui.exited
+    console.log("")
+    console.log("⚠️  No model selected. You can set it later by editing .env:")
+    console.log("   OPENCODE_MODEL=anthropic/claude-3-5-sonnet-20241022")
   }
 }
 
@@ -124,10 +159,10 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  await ensureOpencodeAuth(updates)
+
   const merged = updateEnvLines(lines, updates)
   await saveEnvFile(merged)
-
-  await ensureOpencodeAuth()
   
   console.log("")
   console.log("============================================")
