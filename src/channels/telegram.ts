@@ -18,7 +18,7 @@ function whitelistInstruction(userID: string, filePath: string): string {
     "Access restricted.",
     `Your Telegram ID: ${userID}`,
     "Send /pair <token> to whitelist yourself.",
-    `If you don't have a token, ask admin to add you under 'telegram' in ${filePath}.`,
+    `If you don't have a token, ask admin to add you in ${filePath}.`,
   ].join("\n")
 }
 
@@ -30,7 +30,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     if (flushingOutbox) return
     flushingOutbox = true
     try {
-      const pending = await listOutbox("telegram")
+      const pending = await listOutbox()
       for (const item of pending) {
         const chunks = splitTextChunks(item.message.text, 3000)
         for (const chunk of chunks) {
@@ -48,7 +48,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
   bot.command("start", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const allowed = opts.whitelist.isWhitelisted("telegram", userID)
+    const allowed = opts.whitelist.isWhitelisted(userID)
     opts.logger.info({ chatID: ctx.chat.id, userID, allowed }, "telegram /start")
     if (!allowed) {
       await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
@@ -72,14 +72,14 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       await ctx.reply("Invalid pairing token.")
       return
     }
-    const created = await opts.whitelist.add("telegram", userID)
+    const created = await opts.whitelist.add(userID)
     opts.logger.info({ userID, created }, "telegram pairing")
     await ctx.reply(created ? "Pairing successful. You are now whitelisted." : "You are already whitelisted.")
   })
 
   bot.command("new", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const allowed = opts.whitelist.isWhitelisted("telegram", userID)
+    const allowed = opts.whitelist.isWhitelisted(userID)
     if (!allowed) {
       await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
       return
@@ -90,7 +90,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
   bot.command("remember", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const allowed = opts.whitelist.isWhitelisted("telegram", userID)
+    const allowed = opts.whitelist.isWhitelisted(userID)
     opts.logger.info({ chatID: ctx.chat.id, userID, allowed }, "telegram /remember")
     if (!allowed) {
       await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
@@ -113,7 +113,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
     const startedAt = Date.now()
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const allowed = opts.whitelist.isWhitelisted("telegram", userID)
+    const allowed = opts.whitelist.isWhitelisted(userID)
     opts.logger.info(
       {
         updateID: ctx.update.update_id,

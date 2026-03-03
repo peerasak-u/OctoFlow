@@ -1,8 +1,3 @@
-import { DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys"
-import makeWASocket from "@whiskeysockets/baileys"
-// @ts-ignore qrcode-terminal ships without bundled types in some installs.
-import qrcode from "qrcode-terminal"
-import pino from "pino"
 import { ensureDir, readText, writeText } from "../utils/fs"
 import { joinPath, resolvePath } from "../utils/path"
 import { saveLastChannel } from "../utils/last-channel"
@@ -98,69 +93,6 @@ async function ensureOpencodeAuth(): Promise<void> {
   }
 }
 
-async function waitForWhatsAppOpen(
-  sock: ReturnType<typeof makeWASocket>,
-  showQr: boolean,
-): Promise<"open" | "restart"> {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("WhatsApp QR timeout")), 2 * 60_000)
-    sock.ev.on("connection.update", (update) => {
-      const { connection, lastDisconnect, qr } = update
-      if (showQr && qr) {
-        qrcode.generate(qr, { small: true })
-      }
-      if (connection === "open") {
-        clearTimeout(timer)
-        resolve("open")
-      }
-      if (connection === "close") {
-        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode
-        const message = (lastDisconnect?.error as any)?.message
-        const streamError = message?.includes("Stream Errored")
-        if (streamError) {
-          clearTimeout(timer)
-          resolve("restart")
-          return
-        }
-        if (statusCode === DisconnectReason.loggedOut) {
-          clearTimeout(timer)
-          reject(new Error("WhatsApp logged out"))
-        }
-      }
-    })
-  })
-}
-
-async function setupWhatsApp(authDir: string): Promise<string> {
-  await ensureDir(authDir)
-  const { state, saveCreds } = await useMultiFileAuthState(authDir)
-
-  let sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: "error" }),
-  })
-  sock.ev.on("creds.update", saveCreds)
-  let userID = ""
-
-  try {
-    const first = await waitForWhatsAppOpen(sock, true)
-    userID = sock.user?.id ?? ""
-    if (first === "restart") {
-      sock.end?.(new Error("restart"))
-      sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: "error" }),
-      })
-      sock.ev.on("creds.update", saveCreds)
-      await waitForWhatsAppOpen(sock, false)
-      userID = sock.user?.id ?? userID
-    }
-  } finally {
-    sock.end?.(new Error("setup complete"))
-  }
-  return userID
-}
-
 async function main(): Promise<void> {
   const lines = await loadEnvFile()
   const current = parseEnv(lines)
@@ -173,25 +105,10 @@ async function main(): Promise<void> {
     updates.ENABLE_TELEGRAM = "true"
     if (token) updates.TELEGRAM_BOT_TOKEN = token
     if (telegramUserID) {
-      await saveLastChannel("telegram", telegramUserID)
+      await saveLastChannel(telegramUserID)
     }
   } else {
     updates.ENABLE_TELEGRAM = "false"
-  }
-
-  const enableWhatsApp = ask("Enable WhatsApp? (y/N): ")
-  if (enableWhatsApp.toLowerCase().startsWith("y")) {
-    updates.ENABLE_WHATSAPP = "true"
-    const authDir = current.WHATSAPP_AUTH_DIR || ".data/whatsapp-auth"
-    updates.WHATSAPP_AUTH_DIR = authDir
-    console.log("Scan the QR to connect WhatsApp...")
-    const waUserID = await setupWhatsApp(resolvePath(Bun.cwd, authDir))
-    if (waUserID) {
-      await saveLastChannel("whatsapp", waUserID)
-    }
-    console.log("WhatsApp connected.")
-  } else {
-    updates.ENABLE_WHATSAPP = "false"
   }
 
   console.log("WHITELIST_PAIR_TOKEN allows users to self-pair via '/pair <token>' in chat.")
@@ -201,8 +118,8 @@ async function main(): Promise<void> {
   const pairToken = ask(pairTokenPrompt)
   if (pairToken) updates.WHITELIST_PAIR_TOKEN = pairToken
 
-  if (updates.ENABLE_TELEGRAM !== "true" && updates.ENABLE_WHATSAPP !== "true") {
-    console.log("No channels enabled. Aborting setup.")
+  if (updates.ENABLE_TELEGRAM !== "true") {
+    console.log("Telegram not enabled. Aborting setup.")
     process.exit(1)
   }
 

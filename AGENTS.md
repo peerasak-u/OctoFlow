@@ -18,7 +18,7 @@ Startup flow:
 1. Load config from `src/config.ts`.
 2. Set `OPENCODE_CONFIG_DIR` to this repo.
 3. Initialize `AssistantCore`, `MemoryStore`, `SessionStore`, `WhitelistStore`.
-4. Start Telegram/WhatsApp adapters.
+4. Start Telegram adapter.
 5. Start heartbeat scheduler if `.data/heartbeat.md` has tasks.
 
 ## OpenCode Integration
@@ -39,13 +39,7 @@ Telegram: `src/channels/telegram.ts`
 - `grammy`
 - `/pair`, `/new`, `/remember`
 - typing indicator
-
-WhatsApp: `src/channels/whatsapp.ts`
-- `@whiskeysockets/baileys`
-- `/pair`, `/new`, `/remember`
-- QR login + reconnect
-
-Both enforce whitelist and chunk long replies.
+- Enforces whitelist and chunks long replies
 
 ## Memory
 
@@ -101,7 +95,7 @@ Whitelist: `.data/whitelist.json`
 - `.data/whitelist.json`
 - `.data/last-channel.json`
 - `.data/outbox/`
-- `.data/whatsapp-auth/`
+
 - `.data/heartbeat.md`
 
 ## Commands

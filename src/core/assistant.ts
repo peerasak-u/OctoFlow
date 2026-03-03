@@ -7,7 +7,7 @@ import { MemoryStore } from "../memory/store"
 import { SessionStore } from "./session-store"
 
 type AssistantInput = {
-  channel: "telegram" | "whatsapp" | "system"
+  channel: "telegram" | "system"
   userID: string
   text: string
 }
@@ -227,8 +227,8 @@ export class AssistantCore {
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
 
-    if (input.channel === "telegram" || input.channel === "whatsapp") {
-      await saveLastChannel(input.channel, input.userID)
+    if (input.channel === "telegram") {
+      await saveLastChannel(input.userID)
     }
 
     const memoryContext = await this.memory.readAll()

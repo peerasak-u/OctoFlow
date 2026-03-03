@@ -1,16 +1,12 @@
 import { ensureDir, readJson, writeJson } from "../utils/fs"
 import { basename, dirname, relativePath, resolvePath } from "../utils/path"
 
-type Channel = "telegram" | "whatsapp"
-
 type WhitelistData = {
   telegram: string[]
-  whatsapp: string[]
 }
 
 const DEFAULT_DATA: WhitelistData = {
   telegram: [],
-  whatsapp: [],
 }
 
 export class WhitelistStore {
@@ -24,7 +20,6 @@ export class WhitelistStore {
       const parsed = await readJson<Partial<WhitelistData>>(this.filePath)
       this.data = {
         telegram: Array.isArray(parsed.telegram) ? parsed.telegram.map(String) : [],
-        whatsapp: Array.isArray(parsed.whatsapp) ? parsed.whatsapp.map(String) : [],
       }
       await this.persist()
     } catch {
@@ -33,14 +28,14 @@ export class WhitelistStore {
     }
   }
 
-  isWhitelisted(channel: Channel, userID: string): boolean {
-    return this.data[channel].includes(String(userID))
+  isWhitelisted(userID: string): boolean {
+    return this.data.telegram.includes(String(userID))
   }
 
-  async add(channel: Channel, userID: string): Promise<boolean> {
+  async add(userID: string): Promise<boolean> {
     const id = String(userID)
-    if (this.data[channel].includes(id)) return false
-    this.data[channel].push(id)
+    if (this.data.telegram.includes(id)) return false
+    this.data.telegram.push(id)
     await this.persist()
     return true
   }

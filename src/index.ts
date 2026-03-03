@@ -1,6 +1,5 @@
 import { loadConfig } from "./config"
 import { startTelegramAdapter } from "./channels/telegram"
-import { startWhatsAppAdapter } from "./channels/whatsapp"
 import { AssistantCore } from "./core/assistant"
 import { SessionStore } from "./core/session-store"
 import { WhitelistStore } from "./core/whitelist-store"
@@ -82,20 +81,8 @@ async function main() {
     }
   }
 
-  if (cfg.enableWhatsApp) {
-    starters.push(
-      startWhatsAppAdapter({
-        authDir: cfg.whatsAppAuthDir,
-        logger,
-        assistant,
-        whitelist,
-        pairToken: cfg.whitelistPairToken,
-      }),
-    )
-  }
-
   if (starters.length === 0) {
-    logger.warn("No channel enabled. Set ENABLE_TELEGRAM and/or ENABLE_WHATSAPP.")
+    logger.warn("No channel enabled. Set ENABLE_TELEGRAM.")
   }
 
   await Promise.all(starters)

@@ -2,7 +2,6 @@ import { ensureDir, listFiles, readJson, removeFile } from "./fs"
 import { joinPath, resolvePath } from "./path"
 
 export type OutboxMessage = {
-  channel: "telegram" | "whatsapp"
   userID: string
   text: string
 }
@@ -14,7 +13,7 @@ type Pending = {
 
 const outboxDir = resolvePath(Bun.cwd, ".data/outbox")
 
-export async function listOutbox(channel: OutboxMessage["channel"]): Promise<Pending[]> {
+export async function listOutbox(): Promise<Pending[]> {
   await ensureDir(outboxDir)
   const files = await listFiles(outboxDir)
   const pending: Pending[] = []
@@ -24,9 +23,8 @@ export async function listOutbox(channel: OutboxMessage["channel"]): Promise<Pen
     const filePath = joinPath(outboxDir, name)
     try {
       const msg = await readJson<Partial<OutboxMessage>>(filePath)
-      if (msg.channel !== channel) continue
       if (typeof msg.userID !== "string" || typeof msg.text !== "string") continue
-      pending.push({ filePath, message: { channel, userID: msg.userID, text: msg.text } })
+      pending.push({ filePath, message: { userID: msg.userID, text: msg.text } })
     } catch {
       // Ignore malformed files.
     }

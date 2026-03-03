@@ -8,8 +8,6 @@ export type AppConfig = {
   heartbeatFile: string
   enableTelegram: boolean
   telegramToken?: string
-  enableWhatsApp: boolean
-  whatsAppAuthDir: string
   workspaceDir: string
   opencodeModel?: string
   opencodeServerUrl?: string
@@ -67,8 +65,6 @@ export async function loadConfig(): Promise<AppConfig> {
     heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
     enableTelegram: envBool(Bun.env.ENABLE_TELEGRAM, true),
     telegramToken: Bun.env.TELEGRAM_BOT_TOKEN,
-    enableWhatsApp: envBool(Bun.env.ENABLE_WHATSAPP, false),
-    whatsAppAuthDir: resolvePath(cwd, Bun.env.WHATSAPP_AUTH_DIR ?? ".data/whatsapp-auth"),
     workspaceDir,
     opencodeModel: await resolveOpencodeModel(Bun.env.OPENCODE_MODEL),
     opencodeServerUrl: Bun.env.OPENCODE_SERVER_URL,
