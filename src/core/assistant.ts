@@ -444,6 +444,14 @@ export class AssistantCore {
                   
                   const event = value as { type?: string; properties?: { part?: unknown } }
                   
+                  // Log the full event structure for debugging
+                  this.logger.debug({ 
+                    eventKeys: Object.keys(event),
+                    eventType: event.type,
+                    propertiesKeys: event.properties ? Object.keys(event.properties) : null,
+                    eventSample: JSON.stringify(event).slice(0, 500)
+                  }, "full event structure")
+                  
                   // Only process events for our session
                   const part = event?.properties?.part as { 
                     type?: string; 
