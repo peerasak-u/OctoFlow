@@ -16,7 +16,36 @@ This project is set up to reuse OpenCode's existing auth mechanisms.
 - Alternate path: set `OPENCODE_SERVER_URL` to connect to an already-running OpenCode server/client setup.
 - No app-specific API key is required in this repo.
 
-## Quick start
+## Quick Install (Recommended)
+
+For Raspberry Pi or Debian/Ubuntu systems, use the automated installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/peerasak-u/OctoFlow/main/scripts/install-pi.sh | sudo bash
+```
+
+This will:
+- Install Bun (if not present)
+- Clone OctoFlow to `/opt/octoflow`
+- Create the `octoflow` service user
+- Install dependencies
+- Run interactive setup
+- Install systemd service for auto-start
+- Install the `octoflow` CLI command
+
+After installation, manage OctoFlow with:
+
+```bash
+octoflow start      # Start the service
+octoflow stop       # Stop the service
+octoflow restart    # Restart the service
+octoflow status     # Check service status
+octoflow logs       # View logs
+```
+
+## Manual Setup
+
+If you prefer manual installation or are on macOS/other systems:
 
 1. Install Bun and dependencies:
 
@@ -70,7 +99,7 @@ nohup bun run dev > octoflow.log 2>&1 &
 disown
 ```
 
-## CLI onboarding
+## CLI Onboarding
 
 Run the interactive setup to configure channels and auth:
 
