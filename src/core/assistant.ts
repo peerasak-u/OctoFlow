@@ -558,6 +558,13 @@ export class AssistantCore {
       } as never)
       const messages = toMessages(messagesResult)
       
+      this.logger.info({ 
+        sessionID, 
+        toolNames, 
+        messageCount: messages.length,
+        lastMessageRole: messages[messages.length - 1]?.info?.role 
+      }, "fetching tool details from session")
+      
       // Find tool calls for each tool name
       for (const toolName of toolNames) {
         if (details.has(toolName)) continue // Already found
@@ -568,8 +575,21 @@ export class AssistantCore {
           const msgParts = msg.parts || []
           
           for (const msgPart of msgParts) {
+            // Debug: log all tool parts found
+            if (msgPart.type === "tool") {
+              this.logger.debug({
+                foundTool: msgPart.tool,
+                lookingFor: toolName,
+                hasInput: !!msgPart.input,
+                inputType: msgPart.input ? typeof msgPart.input : 'none',
+                inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : [],
+                inputSample: msgPart.input ? JSON.stringify(msgPart.input).slice(0, 200) : null
+              }, "checking tool part")
+            }
+            
             if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
               const detail = formatToolDetails(toolName, msgPart.input)
+              this.logger.info({ toolName, detail, input: msgPart.input }, "found tool detail")
               if (detail) {
                 details.set(toolName, detail)
                 break
@@ -578,10 +598,20 @@ export class AssistantCore {
           }
           if (details.has(toolName)) break
         }
+        
+        if (!details.has(toolName)) {
+          this.logger.warn({ toolName }, "tool not found in session messages")
+        }
       }
     } catch (error) {
-      this.logger.debug({ error, sessionID, toolNames }, "failed to fetch session tool details")
+      this.logger.error({ error, sessionID, toolNames }, "failed to fetch session tool details")
     }
+    
+    this.logger.info({ 
+      sessionID, 
+      foundDetails: Array.from(details.entries()),
+      requestedTools: toolNames 
+    }, "tool details fetch result")
     
     return details
   }
