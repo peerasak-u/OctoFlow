@@ -228,21 +228,11 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Send initial status message
       await sendStatusMessage()
 
-      // Track timeline of actions
-      const timeline: TimelineAction[] = []
-
       // Create progress callback
       let answerReceived = false
       const onProgress = (update: ProgressUpdate): void => {
         // Don't update status after answer is received or cancelled
         if (answerReceived || cancelledRequests.has(userID)) return
-        
-        // Track tool and skill calls for timeline (with details for audit)
-        if (update.type === "tool" && "name" in update) {
-          timeline.push({ type: "tool", name: update.name, details: (update as { details?: string }).details })
-        } else if (update.type === "skill" && "name" in update) {
-          timeline.push({ type: "skill", name: update.name, details: (update as { details?: string }).details })
-        }
         
         opts.logger.debug({ updateType: update.type, toolName: (update as { name?: string }).name }, "onProgress called")
         const newText = formatStatusMessage(update)
@@ -254,7 +244,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         void updateStatusMessage(newText)
       }
 
-      let result: { answer: string; sessionID: string }
+      let result: { answer: string; sessionID: string; toolDetails: Array<{ name: string; details?: string; type: 'tool' | 'skill' }> }
       try {
         result = await opts.assistant.ask(
           {
@@ -289,29 +279,20 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Mark that answer is received - prevent further status updates
       answerReceived = true
 
-      const { answer, sessionID } = result
+      const { answer, sessionID, toolDetails } = result
 
       // Delete status message before sending final response
       await deleteStatusMessage()
 
       // Send tool timeline BEFORE the final response (for paranoid users who want to audit)
-      if (SHOW_TOOL_TIMELINE && timeline.length > 0) {
-        // Fetch tool details from session messages (now they're persisted)
-        const toolNames = timeline
-          .filter((a): a is { type: "tool"; name: string; details?: string } => a.type === "tool")
-          .map(a => a.name)
-        
-        const toolDetails = await opts.assistant.getSessionToolDetails(sessionID, [...new Set(toolNames)])
-        
-        // Build timeline with fetched details
-        const enrichedTimeline = timeline.map(action => {
-          if (action.type === "tool" && toolDetails.has(action.name)) {
-            return { ...action, details: toolDetails.get(action.name) }
-          }
-          return action
-        })
-        
-        const timelineText = formatTimeline(enrichedTimeline)
+      if (SHOW_TOOL_TIMELINE && toolDetails.length > 0) {
+        // Build timeline from toolDetails returned by assistant
+        const timeline: TimelineAction[] = toolDetails.map(td => ({
+          type: td.type,
+          name: td.name,
+          details: td.details
+        }))
+        const timelineText = formatTimeline(timeline)
         if (timelineText) {
           await ctx.reply(timelineText, { parse_mode: "Markdown" })
         }
@@ -330,7 +311,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
           durationMs: Date.now() - startedAt,
           answerLength: answer.length,
           chunkCount: chunks.length,
-          timelineActions: timeline.length,
+          toolCount: toolDetails.length,
         },
         "telegram reply sent",
       )

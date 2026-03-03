@@ -178,6 +178,94 @@ function isSkillTool(toolName: string): boolean {
   return knownSkills.includes(name)
 }
 
+function formatToolInput(toolName: string, input: Record<string, unknown>): string | undefined {
+  try {
+    // Check if input is empty or has no keys
+    if (!input || Object.keys(input).length === 0) {
+      return undefined
+    }
+    
+    // Tool-specific formatting for input arguments
+    switch (toolName) {
+      case "bash": {
+        const command = input.command || input.cmd || input.input
+        if (typeof command === "string" && command.length > 0) {
+          return command.length > 80 ? command.slice(0, 80) + "..." : command
+        }
+        break
+      }
+      case "webfetch": {
+        const url = input.url || input.input
+        if (typeof url === "string" && url.length > 0) {
+          return url.length > 80 ? url.slice(0, 80) + "..." : url
+        }
+        break
+      }
+      case "read":
+      case "write":
+      case "edit": {
+        const path = input.filePath || input.path || input.file
+        if (typeof path === "string" && path.length > 0) {
+          // Show relative path or last part
+          const shortPath = path.includes("/") ? path.split("/").slice(-2).join("/") : path
+          return shortPath.length > 60 ? shortPath.slice(0, 60) + "..." : shortPath
+        }
+        break
+      }
+      case "glob": {
+        const pattern = input.pattern
+        if (typeof pattern === "string" && pattern.length > 0) {
+          return pattern
+        }
+        break
+      }
+      case "grep": {
+        const pattern = input.pattern
+        const path = input.path
+        if (typeof pattern === "string" && pattern.length > 0) {
+          const pathStr = typeof path === "string" ? ` in ${path.split("/").pop()}` : ""
+          return `${pattern}${pathStr}`
+        }
+        break
+      }
+      case "install_skill": {
+        const source = input.source
+        if (typeof source === "string" && source.length > 0) {
+          const shortSource = source.includes("/") ? source.split("/").slice(-2).join("/") : source
+          return shortSource
+        }
+        break
+      }
+      case "save_memory": {
+        const fact = input.fact
+        if (typeof fact === "string" && fact.length > 0) {
+          return fact.length > 60 ? fact.slice(0, 60) + "..." : fact
+        }
+        break
+      }
+      default: {
+        // For unknown tools, show first string argument
+        for (const [key, value] of Object.entries(input)) {
+          if (typeof value === "string" && value.length > 0) {
+            const shortValue = value.length > 60 ? value.slice(0, 60) + "..." : value
+            return `${key}: ${shortValue}`
+          }
+        }
+      }
+    }
+    
+    // Fallback: show truncated JSON only if we couldn't extract anything specific
+    const json = JSON.stringify(input)
+    if (json !== "{}" && json.length > 0) {
+      return json.length > 80 ? json.slice(0, 80) + "..." : json
+    }
+    
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 function formatToolDetails(toolName: string, input: unknown): string | undefined {
   try {
     const inputData = input as Record<string, unknown>
@@ -380,7 +468,7 @@ export class AssistantCore {
     await this.sessions.init()
   }
 
-  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<{ answer: string; sessionID: string }> {
+  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<{ answer: string; sessionID: string; toolDetails: Array<{ name: string; details?: string; type: 'tool' | 'skill' }> }> {
     const startedAt = Date.now()
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
@@ -407,7 +495,7 @@ export class AssistantCore {
     )
 
     let beforeAssistantSig = ""
-    const seenTools = new Set<string>()
+    const reportedTools = new Map<string, { name: string; details?: string }>() // callID -> { name, details }
     
     try {
       const beforeMessagesResult = await client.session.messages({
@@ -443,33 +531,57 @@ export class AssistantCore {
                   if (done) break
                   
                   const event = value as { type?: string; properties?: { part?: unknown } }
-
+                  
                   // Only process events for our session
                   const part = event?.properties?.part as { 
+                    id?: string;
+                    callID?: string;
                     type?: string; 
                     sessionID?: string;
                     tool?: string;
-                    state?: { status?: string };
+                    state?: { 
+                      status?: string;
+                      input?: Record<string, unknown>;
+                    };
                   } | undefined
                   
                   if (!part || part.sessionID !== sessionID) continue
                   if (part.type !== "tool") continue
                   
+                  const callID = part.callID || part.id || "unknown"
                   const toolName = part.tool || "unknown"
                   const toolState = part.state?.status
+                  const toolInput = part.state?.input
                   
-                  // Only report tools that are running or pending (not completed)
-                  if ((toolState === "running" || toolState === "pending") && !seenTools.has(toolName)) {
-                    seenTools.add(toolName)
+
+                  
+                  // Check if we've already reported this tool call
+                  const alreadyReported = reportedTools.has(callID)
+                  
+                  // Extract tool input details from the state
+                  const details = toolInput ? formatToolInput(toolName, toolInput) : undefined
+                  
+                  // Update our tracking
+                  if (!alreadyReported) {
+                    // First time seeing this tool call - report it
+                    reportedTools.set(callID, { name: toolName, details })
                     
-                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
+                    this.logger.info({ 
+                      toolName, 
+                      toolState, 
+                      isSkill: isSkillTool(toolName), 
+                      hasDetails: !!details
+                    }, "tool started")
                     
-                    // Report tool without details - details will be fetched at the end
+                    // Report tool with details if available
                     if (isSkillTool(toolName)) {
-                      onProgress({ type: "skill", name: toolName })
+                      onProgress({ type: "skill", name: toolName, details })
                     } else {
-                      onProgress({ type: "tool", name: toolName })
+                      onProgress({ type: "tool", name: toolName, details })
                     }
+                  } else if (details && !reportedTools.get(callID)?.details) {
+                    // We've seen this tool before but now we have details - update tracking
+                    reportedTools.set(callID, { name: toolName, details })
                   }
                 }
               } catch (error) {
@@ -537,109 +649,23 @@ export class AssistantCore {
           durationMs: Date.now() - startedAt,
           usedMessagePolling,
           answerLength: assistantText.length,
+          toolCount: reportedTools.size,
         },
         "assistant request completed",
       )
 
-      return { answer: assistantText, sessionID }
+      // Convert reported tools map to array for return
+      const toolDetails = Array.from(reportedTools.entries()).map(([callID, data]) => ({
+        name: data.name,
+        details: data.details,
+        type: isSkillTool(data.name) ? 'skill' as const : 'tool' as const,
+      }))
+
+      return { answer: assistantText, sessionID, toolDetails }
     } finally {
       // Always clean up active request tracking
       this.activeRequests.delete(input.userID)
     }
-  }
-
-  async getSessionToolDetails(sessionID: string, toolNames: string[]): Promise<Map<string, string>> {
-    const client = this.ensureClient()
-    const details = new Map<string, string>()
-    
-    // Retry logic: messages might be written asynchronously
-    let attempt = 0
-    const maxAttempts = 10
-    const delayMs = 500
-    
-    while (attempt < maxAttempts && details.size < toolNames.length) {
-      try {
-        const messagesResult = await client.session.messages({
-          path: { id: sessionID },
-        } as never)
-        const messages = toMessages(messagesResult)
-        
-        this.logger.info({ 
-          sessionID, 
-          toolNames, 
-          attempt,
-          messageCount: messages.length,
-          lastMessageRole: messages[messages.length - 1]?.info?.role 
-        }, "fetching tool details from session")
-        
-        // Find tool calls for each tool name we haven't found yet
-        for (const toolName of toolNames) {
-          if (details.has(toolName)) continue // Already found
-          
-          // Search from most recent to oldest
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const msg = messages[i]
-            const msgParts = msg.parts || []
-            
-            for (const msgPart of msgParts) {
-              // Debug: log all tool parts found
-              if (msgPart.type === "tool") {
-                this.logger.debug({
-                  foundTool: msgPart.tool,
-                  lookingFor: toolName,
-                  hasInput: !!msgPart.input,
-                  inputType: msgPart.input ? typeof msgPart.input : 'none',
-                  inputKeys: msgPart.input ? Object.keys(msgPart.input as Record<string, unknown>) : [],
-                  inputSample: msgPart.input ? JSON.stringify(msgPart.input).slice(0, 200) : null
-                }, "checking tool part")
-              }
-              
-              if (msgPart.type === "tool" && msgPart.tool === toolName && msgPart.input) {
-                const detail = formatToolDetails(toolName, msgPart.input)
-                this.logger.info({ toolName, detail, input: msgPart.input }, "found tool detail")
-                if (detail) {
-                  details.set(toolName, detail)
-                  break
-                }
-              }
-            }
-            if (details.has(toolName)) break
-          }
-        }
-        
-        // If we found all tools, break early
-        if (details.size === toolNames.length) {
-          break
-        }
-        
-        // Wait before next attempt
-        if (attempt < maxAttempts - 1) {
-          this.logger.info({ attempt, foundSoFar: details.size, totalNeeded: toolNames.length }, "waiting for messages to be persisted")
-          await new Promise(resolve => setTimeout(resolve, delayMs))
-        }
-        
-      } catch (error) {
-        this.logger.error({ error, sessionID, toolNames, attempt }, "failed to fetch session tool details")
-      }
-      
-      attempt++
-    }
-    
-    // Log missing tools
-    for (const toolName of toolNames) {
-      if (!details.has(toolName)) {
-        this.logger.warn({ toolName, attempts: attempt }, "tool not found in session messages after all retries")
-      }
-    }
-    
-    this.logger.info({ 
-      sessionID, 
-      foundDetails: Array.from(details.entries()),
-      requestedTools: toolNames,
-      attempts: attempt 
-    }, "tool details fetch result")
-    
-    return details
   }
 
   async startNewMainSession(reason = "manual"): Promise<string> {
