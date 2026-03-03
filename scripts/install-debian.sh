@@ -9,8 +9,8 @@ sudo apt install -y zip unzip git curl
 curl -fsSL https://bun.com/install | bash
 
 # Clone repo.
-git clone https://github.com/CefBoud/MonClaw.git
-cd MonClaw
+git clone https://github.com/peerasak-u/ZiroClaw.git
+cd ZiroClaw
 
 # Add Bun to PATH for this shell.
 export BUN_INSTALL="$HOME/.bun"

@@ -1,8 +1,8 @@
-# MonClaw
+# ZiroClaw
 
-![MonClaw Telegram](openclaw-telegram.png)
+![ZiroClaw Telegram](openclaw-telegram.png)
 
-MonClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
+ZiroClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
 
 - Telegram adapter (`grammy`)
 - WhatsApp adapter (`baileys`)
@@ -28,7 +28,7 @@ This project is set up to reuse OpenCode's existing auth mechanisms.
 curl -fsSL https://bun.com/install | bash
 
 # clone repo
-git clone https://github.com/CefBoud/MonClaw.git && cd MonClaw
+git clone https://github.com/peerasak-u/ZiroClaw.git && cd ZiroClaw
 
 # install
 bun install
@@ -70,7 +70,7 @@ bun run dev
 To keep it running after an SSH session ends:
 
 ```bash
-nohup bun run dev > monclaw.log 2>&1 &
+nohup bun run dev > ziroclaw.log 2>&1 &
 disown
 ```
 

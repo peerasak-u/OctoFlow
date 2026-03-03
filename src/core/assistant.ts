@@ -141,7 +141,7 @@ function safeString(value: unknown): string | undefined {
 
 function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number): string {
   return [
-    "You are MonClaw, an autonomous assistant agent running on top of OpenCode.",
+    "You are ZiroClaw, an autonomous assistant agent running on top of OpenCode.",
     "You help with coding and non-coding work: planning, research, writing, operations, and execution tasks.",
     "Be concise, practical, and proactive.",
     "Use native OpenCode plugin tools when relevant.",

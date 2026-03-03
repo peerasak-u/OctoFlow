@@ -1,6 +1,6 @@
-# MonClaw: Repository Guide
+# ZiroClaw: Repository Guide
 
-MonClaw is a minimal assistant layer on top of the OpenCode SDK.
+ZiroClaw is a minimal assistant layer on top of the OpenCode SDK.
 OpenCode handles core agent/runtime behavior; this repo adds channels, memory, heartbeat cron tasks, and a few tools.
 
 ## Design Goals

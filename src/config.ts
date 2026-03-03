@@ -61,7 +61,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const workspaceDir = resolvePath(cwd, ".data/workspace")
 
   return {
-    appName: Bun.env.APP_NAME ?? "monclaw",
+    appName: Bun.env.APP_NAME ?? "ziroclaw",
     logLevel: Bun.env.LOG_LEVEL ?? "info",
     heartbeatIntervalMinutes: envInt(Bun.env.HEARTBEAT_INTERVAL_MINUTES, 30),
     heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
