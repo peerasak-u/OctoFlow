@@ -450,6 +450,7 @@ export class AssistantCore {
                     sessionID?: string;
                     tool?: string;
                     state?: { status?: string };
+                    input?: unknown;
                   } | undefined
                   
                   if (!part || part.sessionID !== sessionID) continue
@@ -458,15 +459,31 @@ export class AssistantCore {
                   const toolName = part.tool || "unknown"
                   const toolState = part.state?.status
                   
+                  // Debug: log the entire part structure
+                  this.logger.debug({ 
+                    partKeys: Object.keys(part),
+                    hasInput: !!part.input,
+                    inputType: part.input ? typeof part.input : 'none',
+                    inputSample: part.input ? JSON.stringify(part.input).slice(0, 200) : null
+                  }, "event part structure")
+                  
                   // Only report tools that are running or pending (not completed)
                   if ((toolState === "running" || toolState === "pending") && !seenTools.has(toolName)) {
                     seenTools.add(toolName)
                     
-                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName) }, "tool event detected")
+                    this.logger.info({ toolName, toolState, isSkill: isSkillTool(toolName), hasEventInput: !!part.input }, "tool event detected")
+                    
+                    // Try to get details from event first, then from messages
+                    let toolDetails: string | undefined
+                    
+                    // Check if input is directly in the event
+                    if (part.input) {
+                      toolDetails = formatToolDetails(toolName, part.input)
+                      this.logger.info({ toolName, toolDetails, source: "event" }, "extracted tool details from event")
+                    }
                     
                     // Fetch tool details (input arguments) from session messages
                     // Retry a few times since there's a race condition between event and message persistence
-                    let toolDetails: string | undefined
                     let retryCount = 0
                     const maxRetries = 5
                     
