@@ -8,6 +8,7 @@ export type AppConfig = {
   heartbeatFile: string
   enableTelegram: boolean
   telegramToken?: string
+  dataDir: string
   workspaceDir: string
   opencodeModel?: string
   opencodeServerUrl?: string
@@ -56,21 +57,23 @@ async function resolveOpencodeModel(explicitModel: string | undefined): Promise<
 
 export async function loadConfig(): Promise<AppConfig> {
   const cwd = Bun.cwd
-  const workspaceDir = resolvePath(cwd, ".data/workspace")
+  const dataDir = resolvePath(cwd, ".data")
+  const workspaceDir = resolvePath(dataDir, "workspace")
 
   return {
     appName: Bun.env.APP_NAME ?? "ziroclaw",
     logLevel: Bun.env.LOG_LEVEL ?? "info",
     heartbeatIntervalMinutes: envInt(Bun.env.HEARTBEAT_INTERVAL_MINUTES, 30),
-    heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
+    heartbeatFile: resolvePath(dataDir, Bun.env.HEARTBEAT_FILE ?? "heartbeat.md"),
     enableTelegram: envBool(Bun.env.ENABLE_TELEGRAM, true),
     telegramToken: Bun.env.TELEGRAM_BOT_TOKEN,
+    dataDir,
     workspaceDir,
     opencodeModel: await resolveOpencodeModel(Bun.env.OPENCODE_MODEL),
     opencodeServerUrl: Bun.env.OPENCODE_SERVER_URL,
     opencodeHostname: Bun.env.OPENCODE_HOSTNAME ?? "127.0.0.1",
     opencodePort: envInt(Bun.env.OPENCODE_PORT, 4096),
-    whitelistFile: resolvePath(cwd, Bun.env.WHITELIST_FILE ?? ".data/whitelist.json"),
+    whitelistFile: resolvePath(dataDir, Bun.env.WHITELIST_FILE ?? "whitelist.json"),
     whitelistPairToken: Bun.env.WHITELIST_PAIR_TOKEN,
   }
 }

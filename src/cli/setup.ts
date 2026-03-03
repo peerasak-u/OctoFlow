@@ -1,11 +1,15 @@
 import { ensureDir, readText, writeText } from "../utils/fs"
 import { joinPath, resolvePath } from "../utils/path"
 import { saveLastChannel } from "../utils/last-channel"
+import { execSync } from "child_process"
 
 type EnvMap = Record<string, string>
 
+// @ts-ignore - Bun-specific import.meta.dir
 const REPO_ROOT = resolvePath(import.meta.dir, "..", "..")
 const ENV_FILE = resolvePath(REPO_ROOT, ".env")
+const SERVICE_TEMPLATE_FILE = resolvePath(REPO_ROOT, "scripts", "templates", "ziroclaw.service.template")
+const SERVICE_FILE = "/etc/systemd/system/ziroclaw.service"
 
 function ask(promptText: string): string {
   const value = prompt(promptText)
@@ -93,6 +97,116 @@ async function ensureOpencodeAuth(): Promise<void> {
   }
 }
 
+async function installService(): Promise<boolean> {
+  console.log("")
+  console.log("Service Installation")
+  console.log("====================")
+  
+  const installService = ask("Install as systemd service (auto-start on boot)? [Y/n]: ")
+  if (!installService.toLowerCase().startsWith("y") && installService !== "") {
+    console.log("Skipping service installation.")
+    return false
+  }
+
+  try {
+    // Read template
+    let template: string
+    try {
+      template = await readText(SERVICE_TEMPLATE_FILE)
+    } catch {
+      console.error("Service template not found. Skipping service installation.")
+      return false
+    }
+
+    // Get Bun path
+    const bunPath = Bun.env.BUN_PATH?.trim() || await getBunPath()
+    if (!bunPath) {
+      console.error("Could not detect Bun path. Please set BUN_PATH environment variable.")
+      return false
+    }
+
+    // Replace template variables
+    const serviceContent = template
+      .replace(/\{\{BUN_PATH\}\}/g, bunPath)
+      .replace(/\{\{WORK_DIR\}\}/g, REPO_ROOT)
+      .replace(/\{\{USER\}\}/g, "ziroclaw")
+
+    // Write to temp file
+    const tempServiceFile = "/tmp/ziroclaw.service"
+    await writeText(tempServiceFile, serviceContent)
+
+    // Copy to systemd directory using sudo
+    console.log("Installing service file...")
+    execSync(`sudo cp "${tempServiceFile}" "${SERVICE_FILE}"`)
+    
+    // Reload systemd
+    console.log("Reloading systemd...")
+    execSync("sudo systemctl daemon-reload")
+    
+    // Enable service
+    console.log("Enabling service...")
+    execSync("sudo systemctl enable ziroclaw")
+
+    console.log("Service installed successfully!")
+    return true
+  } catch (error) {
+    console.error("Failed to install service:", error)
+    return false
+  }
+}
+
+async function getBunPath(): Promise<string | null> {
+  // Check if bun is in PATH
+  try {
+    const result = execSync("which bun", { encoding: "utf-8" })
+    if (result.trim()) return result.trim()
+  } catch {
+    // ignore
+  }
+
+  // Check common locations
+  const commonPaths = [
+    `${Bun.env.HOME}/.bun/bin/bun`,
+    "/usr/local/bin/bun",
+    "/opt/homebrew/bin/bun",
+  ]
+
+  for (const path of commonPaths) {
+    try {
+      await readText(path)
+      return path
+    } catch {
+      // ignore
+    }
+  }
+
+  return null
+}
+
+async function startService(): Promise<void> {
+  console.log("")
+  const startNow = ask("Start the service now? [Y/n]: ")
+  if (!startNow.toLowerCase().startsWith("y") && startNow !== "") {
+    console.log("You can start the service later with: ziroclaw start")
+    return
+  }
+
+  try {
+    console.log("Starting ZiroClaw service...")
+    execSync("sudo systemctl start ziroclaw")
+    console.log("Service started!")
+    
+    // Wait a moment and check status
+    await Bun.sleep(2000)
+    console.log("")
+    console.log("Service status:")
+    execSync("systemctl status ziroclaw --no-pager || true", { stdio: "inherit" })
+  } catch (error) {
+    console.error("Failed to start service:", error)
+    console.log("You can check the logs with: ziroclaw logs")
+  }
+}
+
 async function main(): Promise<void> {
   const lines = await loadEnvFile()
   const current = parseEnv(lines)
@@ -128,7 +242,29 @@ async function main(): Promise<void> {
 
   await ensureOpencodeAuth()
 
-  console.log("Setup complete. Run: bun run dev")
+  // Install systemd service
+  const serviceInstalled = await installService()
+  
+  if (serviceInstalled) {
+    // Optionally start the service
+    await startService()
+    
+    console.log("")
+    console.log("============================================")
+    console.log("Setup complete!")
+    console.log("")
+    console.log("Quick commands:")
+    console.log("  ziroclaw status    - Check service status")
+    console.log("  ziroclaw logs      - View logs")
+    console.log("  ziroclaw stop      - Stop service")
+    console.log("  ziroclaw restart   - Restart service")
+    console.log("============================================")
+  } else {
+    console.log("")
+    console.log("Setup complete!")
+    console.log("Run manually: bun run dev")
+  }
+  
   process.exit(0)
 }
 

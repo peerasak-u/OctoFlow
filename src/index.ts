@@ -5,6 +5,7 @@ import { SessionStore } from "./core/session-store"
 import { WhitelistStore } from "./core/whitelist-store"
 import { MemoryStore } from "./memory/store"
 import { startHeartbeat } from "./scheduler/heartbeat"
+import { startHealthCheck } from "./utils/health"
 import { createLogger } from "./utils/logger"
 
 // Ensure OpenCode reads AGENTS.md from this workspace by default.
@@ -28,6 +29,10 @@ async function main() {
 
   await assistant.init()
   await whitelist.init()
+  
+  // Start health check for systemd monitoring
+  const stopHealthCheck = startHealthCheck(cfg.dataDir)
+  
   const heartbeatStatus = await assistant.heartbeatTaskStatus()
   if (heartbeatStatus.empty) {
     logger.warn(
@@ -44,6 +49,7 @@ async function main() {
   const shutdown = (code: number) => {
     if (shuttingDown) return
     shuttingDown = true
+    stopHealthCheck()
     void assistant.close().finally(() => process.exit(code))
   }
 

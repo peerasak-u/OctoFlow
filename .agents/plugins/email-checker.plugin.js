@@ -16,7 +16,7 @@ export default {
       },
       handler: async ({ limit = 3 }) => {
         try {
-          const gogPath = `${process.env.HOME}/OSS/playground-cef/openclaw/gogcli/bin/gog`
+          const gogPath = process.env.GOGCLI_PATH || `${process.env.HOME}/OSS/playground-cef/openclaw/gogcli/bin/gog`
           const cmd = Bun.spawn([gogPath, "gmail", "search", "--limit", limit.toString(), "is:inbox"], {
             stdout: "pipe",
             stderr: "pipe"

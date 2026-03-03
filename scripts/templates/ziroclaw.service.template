@@ -1,0 +1,24 @@
+[Unit]
+Description=ZiroClaw AI Assistant
+After=network.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{USER}}
+WorkingDirectory={{WORK_DIR}}
+
+ExecStart={{BUN_PATH}} {{WORK_DIR}}/src/index.ts
+
+Environment="HOME={{WORK_DIR}}"
+Environment="OPENCODE_CONFIG_DIR={{WORK_DIR}}"
+EnvironmentFile=-{{WORK_DIR}}/.env
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
