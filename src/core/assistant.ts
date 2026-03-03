@@ -380,7 +380,7 @@ export class AssistantCore {
     await this.sessions.init()
   }
 
-  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<string> {
+  async ask(input: AssistantInput, onProgress?: ProgressCallback): Promise<{ answer: string; sessionID: string }> {
     const startedAt = Date.now()
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
@@ -541,7 +541,7 @@ export class AssistantCore {
         "assistant request completed",
       )
 
-      return assistantText
+      return { answer: assistantText, sessionID }
     } finally {
       // Always clean up active request tracking
       this.activeRequests.delete(input.userID)

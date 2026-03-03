@@ -254,9 +254,9 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         void updateStatusMessage(newText)
       }
 
-      let answer: string
+      let result: { answer: string; sessionID: string }
       try {
-        answer = await opts.assistant.ask(
+        result = await opts.assistant.ask(
           {
             channel: "telegram",
             userID,
@@ -289,15 +289,13 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       // Mark that answer is received - prevent further status updates
       answerReceived = true
 
-      // Get session ID for fetching tool details
-      const activeRequest = opts.assistant.getActiveRequest(userID)
-      const sessionID = activeRequest?.sessionID
+      const { answer, sessionID } = result
 
       // Delete status message before sending final response
       await deleteStatusMessage()
 
       // Send tool timeline BEFORE the final response (for paranoid users who want to audit)
-      if (SHOW_TOOL_TIMELINE && timeline.length > 0 && sessionID) {
+      if (SHOW_TOOL_TIMELINE && timeline.length > 0) {
         // Fetch tool details from session messages (now they're persisted)
         const toolNames = timeline
           .filter((a): a is { type: "tool"; name: string; details?: string } => a.type === "tool")
